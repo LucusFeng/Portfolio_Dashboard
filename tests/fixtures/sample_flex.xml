@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U111111">
+      <OpenPositions>
+        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="265598" symbol="AAPL" description="APPLE INC" assetCategory="STK" currency="USD" position="10" costBasisPrice="150.00" />
+        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="756733" symbol="XIC" description="ISHARES CORE S&amp;P TSX CAPPED COMP" assetCategory="ETF" currency="CAD" position="20" costBasisPrice="32.00" />
+        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="999999" symbol="OPT" description="IGNORED OPTION" assetCategory="OPT" currency="USD" position="1" costBasisPrice="1.00" />
+      </OpenPositions>
+      <CashReport accountId="U111111" acctAlias="RRSP" currency="USD" endingCash="1250.50" />
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>

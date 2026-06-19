@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portfolio Dashboard</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d9dee7;
+      --accent: #0f766e;
+      --warn: #b45309;
+      --bad: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+    }
+    header, main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+    }
+    h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: 0; }
+    h2 { margin: 0 0 14px; font-size: 18px; letter-spacing: 0; }
+    p { margin: 0; color: var(--muted); }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    button {
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: white;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    button.secondary { background: white; color: var(--accent); }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .stat strong { display: block; font-size: 24px; margin-top: 8px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 22px;
+      overflow-x: auto;
+    }
+    table { width: 100%; border-collapse: collapse; min-width: 840px; }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      padding: 10px 8px;
+      white-space: nowrap;
+    }
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .muted { color: var(--muted); }
+    .warn { color: var(--warn); font-weight: 650; }
+    .empty { padding: 24px 8px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Portfolio Dashboard</h1>
+      <p>Local consolidated view across IBKR accounts, normalized to CAD.</p>
+      {% if data.last_ingestion_message %}
+        <p class="muted">Last run: {{ data.last_ingestion_message }}</p>
+      {% endif %}
+    </div>
+    <div class="actions">
+      <form method="post" action="/refresh/positions"><button type="submit">Refresh positions</button></form>
+      <form method="post" action="/refresh/prices"><button class="secondary" type="submit">Refresh prices</button></form>
+    </div>
+  </header>
+
+  <main>
+    <div class="stats">
+      <div class="stat">
+        <span class="muted">CAD grand total</span>
+        <strong>${{ "%.2f"|format(data.grand_total_cad) }}</strong>
+      </div>
+      <div class="stat">
+        <span class="muted">USDCAD</span>
+        <strong>{% if data.latest_fx_rate %}{{ "%.4f"|format(data.latest_fx_rate) }}{% else %}<span class="warn">missing</span>{% endif %}</strong>
+      </div>
+      <div class="stat">
+        <span class="muted">Holdings</span>
+        <strong>{{ data.holdings|length }}</strong>
+      </div>
+    </div>
+
+    <section>
+      <h2>Accounts</h2>
+      {% if data.account_summaries %}
+      <table>
+        <thead><tr><th>Account</th><th class="num">Market value CAD</th><th class="num">Missing marks</th></tr></thead>
+        <tbody>
+          {% for account in data.account_summaries %}
+          <tr>
+            <td>{{ account.account_label }}</td>
+            <td class="num">${{ "%.2f"|format(account.market_value_cad) }}</td>
+            <td class="num">{{ account.missing_prices }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="empty">No positions yet. Configure IBKR Flex credentials, then refresh positions.</div>
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>Consolidated Holdings</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th><th>Name</th><th>Class</th><th class="num">Qty</th>
+            <th class="num">Price</th><th class="num">Value CAD</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in data.consolidated %}
+          <tr>
+            <td>{{ row.symbol }}</td>
+            <td>{{ row.name }}</td>
+            <td>{{ row.asset_class }}</td>
+            <td class="num">{{ "%.4f"|format(row.quantity) }}</td>
+            <td class="num">{% if row.price is not none %}{{ "%.2f"|format(row.price) }} {{ row.currency }}{% else %}-{% endif %}</td>
+            <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
+            <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Account Drilldown</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Account</th><th>Symbol</th><th>Name</th><th>Class</th><th class="num">Qty</th>
+            <th class="num">Avg cost</th><th class="num">Price</th><th class="num">Value CAD</th><th class="num">Unrealized PnL</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in data.holdings %}
+          <tr>
+            <td>{{ row.account_label }}</td>
+            <td>{{ row.symbol }}</td>
+            <td>{{ row.name }}</td>
+            <td>{{ row.asset_class }}</td>
+            <td class="num">{{ "%.4f"|format(row.quantity) }}</td>
+            <td class="num">{% if row.avg_cost is not none %}{{ "%.2f"|format(row.avg_cost) }}{% else %}-{% endif %}</td>
+            <td class="num">{% if row.price is not none %}{{ "%.2f"|format(row.price) }} {{ row.currency }}{% else %}-{% endif %}</td>
+            <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
+            <td class="num">{% if row.unrealized_pnl is not none %}{{ "%.2f"|format(row.unrealized_pnl) }} {{ row.currency }}{% else %}-{% endif %}</td>
+            <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

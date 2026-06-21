@@ -363,6 +363,9 @@ pluggable providers) clean so later phases attach without restructuring.
 
 ## Setup
 
+For step-by-step terminal commands, including virtual environment setup and Anaconda
+troubleshooting, see [docs/run-from-terminal.md](docs/run-from-terminal.md).
+
 ### Stack
 - **Backend:** Python + FastAPI
 - **Storage:** SQLite (zero-config, single-user, local)

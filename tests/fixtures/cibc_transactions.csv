@@ -1,0 +1,4 @@
+Date,Transaction Type,Symbol,Security,Quantity,Price,Amount,Currency,Transaction ID
+2026-06-01,Contribution,,,,,5000.00,CAD,CIBC1
+2026-06-02,Buy,RY,ROYAL BANK OF CANADA,5,130.00,-650.00,CAD,CIBC2
+2026-06-03,Dividend,RY,ROYAL BANK OF CANADA,,,8.00,CAD,CIBC3

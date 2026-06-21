@@ -45,6 +45,16 @@
       cursor: pointer;
     }
     button.secondary { background: white; color: var(--accent); }
+    input[type="file"] {
+      max-width: 210px;
+      color: var(--muted);
+    }
+    .upload {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     .stats {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -89,14 +99,19 @@
   <header>
     <div>
       <h1>Portfolio Dashboard</h1>
-      <p>Local consolidated view across IBKR accounts, normalized to CAD.</p>
+      <p>Transaction-first local portfolio platform, normalized to CAD.</p>
       {% if data.last_ingestion_message %}
         <p class="muted">Last run: {{ data.last_ingestion_message }}</p>
       {% endif %}
     </div>
     <div class="actions">
-      <form method="post" action="/refresh/positions"><button type="submit">Refresh positions</button></form>
+      <form method="post" action="/refresh/transactions"><button type="submit">Refresh transactions</button></form>
       <form method="post" action="/refresh/prices"><button class="secondary" type="submit">Refresh prices</button></form>
+      <form method="post" action="/refresh/reference"><button class="secondary" type="submit">Enrich reference</button></form>
+      <form class="upload" method="post" action="/upload/cibc" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".csv">
+        <button class="secondary" type="submit">Upload CIBC CSV</button>
+      </form>
     </div>
   </header>
 
@@ -132,9 +147,31 @@
         </tbody>
       </table>
       {% else %}
-        <div class="empty">No positions yet. Configure IBKR Flex credentials, then refresh positions.</div>
+        <div class="empty">No positions yet. Configure IBKR Flex credentials or upload CIBC CSV, then refresh transactions.</div>
       {% endif %}
     </section>
+
+    {% if data.reconciliation_warnings %}
+    <section>
+      <h2>Reconciliation Warnings</h2>
+      <table>
+        <thead>
+          <tr><th>Account</th><th>Symbol</th><th class="num">Broker qty</th><th class="num">Derived qty</th><th class="num">Difference</th></tr>
+        </thead>
+        <tbody>
+          {% for warning in data.reconciliation_warnings %}
+          <tr>
+            <td>{{ warning.account_label }}</td>
+            <td>{{ warning.symbol }}</td>
+            <td class="num">{{ "%.4f"|format(warning.broker_quantity) }}</td>
+            <td class="num">{{ "%.4f"|format(warning.derived_quantity) }}</td>
+            <td class="num warn">{{ "%.4f"|format(warning.difference) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
 
     <section>
       <h2>Consolidated Holdings</h2>
@@ -183,6 +220,49 @@
             <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
             <td class="num">{% if row.unrealized_pnl is not none %}{{ "%.2f"|format(row.unrealized_pnl) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Batch PnL</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Account</th><th>Symbol</th><th>Open date</th><th class="num">Remaining qty</th>
+            <th class="num">Cost/unit</th><th class="num">Price</th><th class="num">Value CAD</th>
+            <th class="num">Unrealized PnL CAD</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in data.batch_pnl %}
+          <tr>
+            <td>{{ row.account_label }}</td>
+            <td>{{ row.symbol }}</td>
+            <td>{{ row.open_date }}</td>
+            <td class="num">{{ "%.4f"|format(row.remaining_qty) }}</td>
+            <td class="num">{{ "%.2f"|format(row.cost_per_unit) }}</td>
+            <td class="num">{% if row.price is not none %}{{ "%.2f"|format(row.price) }}{% else %}-{% endif %}</td>
+            <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
+            <td class="num">{% if row.unrealized_pnl_cad is not none %}${{ "%.2f"|format(row.unrealized_pnl_cad) }}{% else %}-{% endif %}</td>
+            <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Contributions</h2>
+      <table>
+        <thead><tr><th>Date</th><th class="num">Cumulative contributions CAD</th></tr></thead>
+        <tbody>
+          {% for point in data.growth_points %}
+          <tr>
+            <td>{{ point.date }}</td>
+            <td class="num">{% if point.cumulative_contributions_cad is not none %}${{ "%.2f"|format(point.cumulative_contributions_cad) }}{% else %}<span class="warn">missing FX</span>{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>

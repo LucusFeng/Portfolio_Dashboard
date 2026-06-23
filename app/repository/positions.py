@@ -17,6 +17,12 @@ class OpenLot:
     cost_currency: str
     open_txn_id: int
 
+    def add_buy(self, quantity: float, price: float) -> None:
+        total_cost = self.open_quantity * self.cost_per_unit + quantity * price
+        self.open_quantity += quantity
+        self.remaining_qty += quantity
+        self.cost_per_unit = total_cost / self.open_quantity
+
 
 def rebuild_lots(conn: sqlite3.Connection) -> int:
     conn.execute("DELETE FROM lots")
@@ -34,18 +40,31 @@ def rebuild_lots(conn: sqlite3.Connection) -> int:
         lots = buckets.setdefault(key, [])
         qty = abs(float(row["quantity"] or 0))
         if row["txn_type"] == "BUY":
-            lots.append(
-                OpenLot(
-                    account_id=key[0],
-                    instrument_id=key[1],
-                    open_date=row["txn_date"],
-                    open_quantity=qty,
-                    remaining_qty=qty,
-                    cost_per_unit=float(row["price"] or 0),
-                    cost_currency=row["currency"],
-                    open_txn_id=int(row["id"]),
-                )
+            price = float(row["price"] or 0)
+            matching_lot = next(
+                (
+                    lot
+                    for lot in lots
+                    if lot.open_date == row["txn_date"]
+                    and lot.cost_currency == row["currency"]
+                ),
+                None,
             )
+            if matching_lot is not None:
+                matching_lot.add_buy(qty, price)
+            else:
+                lots.append(
+                    OpenLot(
+                        account_id=key[0],
+                        instrument_id=key[1],
+                        open_date=row["txn_date"],
+                        open_quantity=qty,
+                        remaining_qty=qty,
+                        cost_per_unit=price,
+                        cost_currency=row["currency"],
+                        open_txn_id=int(row["id"]),
+                    )
+                )
             continue
         remaining_to_sell = qty
         for lot in lots:

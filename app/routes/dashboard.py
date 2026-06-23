@@ -5,7 +5,13 @@ from fastapi.templating import Jinja2Templates
 from app.config import Settings, get_settings
 from app.db import connect, init_db, transaction
 from app.ingestion.cibc_csv import parse_cibc_transactions
-from app.ingestion.ibkr_flex import FlexClient, parse_flex_positions, parse_flex_transactions, today_snapshot_date
+from app.ingestion.ibkr_flex import (
+    FlexClient,
+    parse_flex_positions,
+    parse_flex_transactions,
+    summarize_flex_xml,
+    today_snapshot_date,
+)
 from app.ingestion.ibkr_gateway import GatewayAuthError, GatewayClient, current_fx_mark
 from app.ingestion.reference_data import YFinanceProvider
 from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
@@ -59,27 +65,62 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
     snapshot_date = today_snapshot_date()
     inserted = 0
     reconciled = 0
+    parsed_transactions_count = 0
+    parsed_positions_count = 0
+    section_counts = []
+    lots = 0
+    positions = 0
     try:
         with transaction(conn):
             for login_name, login in settings.flex_logins.items():
                 xml_text = client.fetch_statement(login.token, login.query_id)
-                inserted += append_transactions(
-                    conn,
-                    parse_flex_transactions(xml_text, source="ibkr_flex_%s" % login_name),
+                summary = summarize_flex_xml(xml_text)
+                section_counts.append(
+                    "%s sections: trades=%s executions=%s cash_txns=%s open_positions=%s cash_reports=%s"
+                    % (
+                        login_name,
+                        summary["Trade"],
+                        summary["Execution"],
+                        summary["CashTransaction"],
+                        summary["OpenPosition"] + summary["Position"],
+                        summary["CashReport"],
+                    )
                 )
+                parsed_transactions = parse_flex_transactions(xml_text, source="ibkr_flex_%s" % login_name)
+                parsed_positions = parse_flex_positions(xml_text)
+                parsed_transactions_count += len(parsed_transactions)
+                parsed_positions_count += len(parsed_positions)
+                inserted += append_transactions(conn, parsed_transactions)
                 lots, positions = rebuild_derived_state(conn, snapshot_date)
                 reconciled += record_reconciliation(
                     conn,
-                    parse_flex_positions(xml_text),
+                    parsed_positions,
                     snapshot_date,
                     "IBKR Flex %s positions" % login_name,
                 )
+            status = "success"
+            hint = ""
+            if parsed_transactions_count == 0 and parsed_positions_count > 0:
+                status = "needs_transaction_history"
+                hint = " Broker positions were found, but no trades/cash flows were parsed; expand the Flex query sections/date range."
             record_run(
                 conn,
                 "transactions",
-                "success",
-                "Inserted %s transactions; rebuilt %s lots/%s positions; reconciled %s rows."
-                % (inserted, lots, positions, reconciled),
+                status,
+                (
+                    "Parsed %s transactions/%s broker positions; inserted %s transactions; "
+                    "rebuilt %s lots/%s positions; reconciled %s rows.%s %s"
+                )
+                % (
+                    parsed_transactions_count,
+                    parsed_positions_count,
+                    inserted,
+                    lots,
+                    positions,
+                    reconciled,
+                    hint,
+                    " | ".join(section_counts),
+                ),
             )
     except Exception as exc:
         with transaction(conn):

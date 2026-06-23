@@ -1,4 +1,5 @@
 import datetime as dt
+import ssl
 import time
 import urllib.parse
 import urllib.request
@@ -10,6 +11,23 @@ from app.repository.instruments import normalize_asset_class
 
 
 SUPPORTED_ASSET_CLASSES = {"EQUITY", "ETF", "CASH"}
+
+
+def summarize_flex_xml(xml_text: str) -> Dict[str, int]:
+    root = ET.fromstring(xml_text)
+    counts = {
+        "Trade": 0,
+        "Execution": 0,
+        "CashTransaction": 0,
+        "OpenPosition": 0,
+        "Position": 0,
+        "CashReport": 0,
+    }
+    for node in root.iter():
+        tag = node.tag.split("}")[-1]
+        if tag in counts:
+            counts[tag] += 1
+    return counts
 
 
 def _attr(node: ET.Element, *names: str) -> Optional[str]:
@@ -131,7 +149,7 @@ def parse_flex_transactions(xml_text: str, source: str = "ibkr_flex") -> List[Pa
         side = (_attr(node, "buySell", "side", "transactionType") or "").upper()
         txn_type = "SELL" if side.startswith("S") or quantity < 0 else "BUY"
         abs_qty = abs(quantity)
-        proceeds = _float(_attr(node, "proceeds", "netCash", "amount"))
+        proceeds = _float(_attr(node, "netCash", "proceeds", "amount"))
         if proceeds is None:
             proceeds = abs_qty * price * (1 if txn_type == "SELL" else -1)
         transactions.append(
@@ -193,7 +211,15 @@ def _cash_type(raw_type: str, amount: float) -> str:
 
 
 def _open_url(url: str, timeout: int = 30) -> str:
-    with urllib.request.urlopen(url, timeout=timeout) as response:
+    context = None
+    try:
+        import certifi
+
+        context = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        context = ssl.create_default_context()
+
+    with urllib.request.urlopen(url, timeout=timeout, context=context) as response:
         return response.read().decode("utf-8")
 
 
@@ -236,7 +262,40 @@ class FlexClient:
         for node in root.iter():
             if node.tag.split("}")[-1] == "ReferenceCode" and node.text:
                 return node.text.strip()
-        raise RuntimeError("IBKR Flex response did not include a ReferenceCode.")
+        raise RuntimeError(
+            "IBKR Flex SendRequest did not return a ReferenceCode. %s"
+            % _response_diagnostic(root)
+        )
+
+
+def _response_diagnostic(root: ET.Element) -> str:
+    fields = []
+    for name in (
+        "Status",
+        "ErrorCode",
+        "ErrorMessage",
+        "Message",
+        "code",
+        "message",
+    ):
+        value = _first_text(root, name)
+        if value:
+            fields.append("%s=%s" % (name, value))
+    if fields:
+        return "Response details: %s" % "; ".join(fields)
+    root_tag = root.tag.split("}")[-1]
+    child_tags = sorted({child.tag.split("}")[-1] for child in list(root)})
+    return "Response root=%s child_tags=%s. Check token, query ID, token expiry, IP restriction, and Flex Web Service enablement." % (
+        root_tag,
+        ",".join(child_tags) if child_tags else "(none)",
+    )
+
+
+def _first_text(root: ET.Element, tag_name: str) -> Optional[str]:
+    for node in root.iter():
+        if node.tag.split("}")[-1].lower() == tag_name.lower() and node.text:
+            return node.text.strip()
+    return None
 
 
 def today_snapshot_date() -> str:

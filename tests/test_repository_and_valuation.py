@@ -127,6 +127,54 @@ def test_batch_pnl_uses_open_lots_and_latest_marks():
     assert round(rows[0].unrealized_pnl_cad, 2) == 675
 
 
+def test_same_day_buys_merge_into_one_weighted_average_batch():
+    conn = memory_db()
+    append_transactions(
+        conn,
+        [
+            ParsedTransaction(
+                txn_date="2026-06-11",
+                broker="IBKR",
+                account_external_id="U111111",
+                account_label="RRSP",
+                tax_type="RRSP",
+                txn_type="BUY",
+                quantity=1,
+                price=237.56,
+                amount=-238.56,
+                currency="USD",
+                source="test",
+                external_id="A1",
+                instrument=ParsedInstrument("EQUITY", "AMZN", "AMAZON.COM INC", "USD", "3691937"),
+            ),
+            ParsedTransaction(
+                txn_date="2026-06-11",
+                broker="IBKR",
+                account_external_id="U111111",
+                account_label="RRSP",
+                tax_type="RRSP",
+                txn_type="BUY",
+                quantity=2,
+                price=237.49,
+                amount=-475.98,
+                currency="USD",
+                source="test",
+                external_id="A2",
+                instrument=ParsedInstrument("EQUITY", "AMZN", "AMAZON.COM INC", "USD", "3691937"),
+            ),
+        ],
+    )
+
+    lots, positions = rebuild_derived_state(conn, "2026-06-15")
+    lot = conn.execute("SELECT open_quantity, remaining_qty, cost_per_unit FROM lots").fetchone()
+
+    assert lots == 1
+    assert positions == 2
+    assert lot["open_quantity"] == 3
+    assert lot["remaining_qty"] == 3
+    assert round(lot["cost_per_unit"], 4) == round((237.56 + 2 * 237.49) / 3, 4)
+
+
 def test_cibc_csv_transactions_parse_into_canonical_model():
     csv_text = Path("tests/fixtures/cibc_transactions.csv").read_text()
 

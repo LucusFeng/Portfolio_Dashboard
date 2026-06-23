@@ -258,3 +258,48 @@ This deletes local app data and lets SQLite rebuild cleanly:
 rm -f data/portfolio.sqlite3
 python -m uvicorn app.main:app --reload
 ```
+
+### IBKR Flex Certificate Error
+
+If **Refresh transactions** records an error like:
+
+```text
+CERTIFICATE_VERIFY_FAILED
+```
+
+make sure dependencies are installed in the active `.venv`:
+
+```bash
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+The app uses `certifi` for IBKR Flex HTTPS certificate verification. Restart Uvicorn after
+installing dependencies.
+
+### Broker Positions Imported But Derived Quantity Is Zero
+
+If the dashboard says something like:
+
+```text
+Parsed 0 transactions/7 broker positions
+```
+
+then IBKR returned open positions, but the Flex report did not include parseable historical
+trades/cash flows. Because this app is transaction-first, derived positions remain zero
+until trades and cash flows are present.
+
+Fix this in IBKR Flex Query setup:
+
+- Include **Trades** or **Executions**.
+- Include **Cash Transactions**.
+- Include **Open Positions** for reconciliation.
+- Use a date range that covers the history needed to reconstruct current holdings, not
+  only today or the current statement period.
+
+After updating the Flex query, reset the dev database and refresh again:
+
+```bash
+rm -f data/portfolio.sqlite3
+python -m uvicorn app.main:app --reload
+```

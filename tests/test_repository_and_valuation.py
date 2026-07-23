@@ -4,12 +4,14 @@ from pathlib import Path
 from app.db import init_db
 from app.ingestion.cibc_csv import parse_cibc_transactions
 from app.ingestion.ibkr_flex import parse_flex_transactions
-from app.models import ParsedInstrument, ParsedTransaction
+from app.models import ParsedCashReport, ParsedInstrument, ParsedTransaction
+from app.repository.cash import record_cash_reconciliation, upsert_cash_balances
 from app.repository.instruments import upsert_instrument
 from app.repository.observations import append_fx_rate, append_price
 from app.repository.positions import rebuild_derived_state
 from app.repository.transactions import append_transactions
 from app.services.batch_pnl import get_batch_pnl
+from app.services.cash import get_cash
 from app.services.valuation import build_dashboard_data
 
 
@@ -73,22 +75,26 @@ def test_transactions_dedup_lots_positions_and_dashboard_values():
     instrument_id = conn.execute("SELECT id FROM instruments WHERE symbol = 'AAPL'").fetchone()["id"]
     append_price(conn, instrument_id, "2026-06-15", 200, "USD", "test")
     append_fx_rate(conn, "USDCAD", "2026-06-15", 1.35, "test")
+    upsert_cash_balances(conn, [ParsedCashReport("U111111", "RRSP", "USD", 1200)], "2026-06-15", "test")
     conn.commit()
 
     assert lots == 1
-    assert positions == 2
+    assert positions == 1
     assert conn.execute("SELECT COUNT(*) AS c FROM transactions").fetchone()["c"] == 3
     assert conn.execute("SELECT remaining_qty FROM lots").fetchone()["remaining_qty"] == 6
 
     data = build_dashboard_data(conn)
 
     aapl = next(row for row in data.holdings if row.symbol == "AAPL")
-    cash = next(row for row in data.holdings if row.symbol == "CASH:USD")
     assert aapl.quantity == 6
     assert aapl.market_value == 1200
     assert aapl.market_value_cad == 1620
     assert aapl.unrealized_pnl == 300
-    assert cash.market_value_cad == 1620
+    assert all(not row.symbol.startswith("CASH:") for row in data.holdings)
+    assert data.cash.accounts[0].usd_cash == 1200
+    assert data.cash.accounts[0].usd_cash_cad == 1620
+    assert data.positions_total_cad == 1620
+    assert data.total_cad == 3240
     assert data.growth_points[-1].cumulative_contributions_cad == 2700
 
 
@@ -169,7 +175,7 @@ def test_same_day_buys_merge_into_one_weighted_average_batch():
     lot = conn.execute("SELECT open_quantity, remaining_qty, cost_per_unit FROM lots").fetchone()
 
     assert lots == 1
-    assert positions == 2
+    assert positions == 1
     assert lot["open_quantity"] == 3
     assert lot["remaining_qty"] == 3
     assert round(lot["cost_per_unit"], 4) == round((237.56 + 2 * 237.49) / 3, 4)
@@ -185,13 +191,52 @@ def test_cibc_csv_transactions_parse_into_canonical_model():
     assert transactions[1].instrument.symbol == "RY"
 
 
-def test_cash_is_valued_at_one_and_converted_to_cad():
+def test_cash_balance_is_read_from_cash_report_and_converted_to_cad():
+    conn = memory_db()
+    upsert_cash_balances(conn, [ParsedCashReport("U111111", "RRSP", "USD", -100)], "2026-06-15", "test")
+    append_fx_rate(conn, "USDCAD", "2026-06-15", 1.25, "test")
+    conn.commit()
+
+    data = build_dashboard_data(conn)
+
+    cash = data.cash.accounts[0]
+    assert cash.usd_cash == -100
+    assert cash.usd_cash_cad == -125
+    assert cash.total_cad == -125
+    assert data.holdings == []
+
+
+def test_cash_balance_upsert_reads_latest_per_account_currency_and_signed_total():
+    conn = memory_db()
+    upsert_cash_balances(
+        conn,
+        [
+            ParsedCashReport("U111111", "RRSP", "USD", -100),
+            ParsedCashReport("U111111", "RRSP", "CAD", 50),
+        ],
+        "2026-06-15",
+        "test",
+    )
+    append_fx_rate(conn, "USDCAD", "2026-06-15", 1.25, "test")
+    conn.commit()
+
+    cash = get_cash(conn)
+
+    assert len(cash.accounts) == 1
+    assert cash.accounts[0].usd_cash == -100
+    assert cash.accounts[0].cad_cash == 50
+    assert cash.accounts[0].usd_cash_cad == -125
+    assert cash.accounts[0].total_cad == -75
+    assert cash.cash_total_cad == -75
+
+
+def test_cash_reconciliation_warns_only_outside_native_tolerance():
     conn = memory_db()
     append_transactions(
         conn,
         [
             ParsedTransaction(
-                txn_date="2026-06-15",
+                txn_date="2026-06-01",
                 broker="IBKR",
                 account_external_id="U111111",
                 account_label="RRSP",
@@ -204,14 +249,67 @@ def test_cash_is_valued_at_one_and_converted_to_cad():
             )
         ],
     )
-    rebuild_derived_state(conn, "2026-06-15")
-    append_fx_rate(conn, "USDCAD", "2026-06-15", 1.25, "test")
+    record_cash_reconciliation(
+        conn,
+        [ParsedCashReport("U111111", "RRSP", "USD", 100.75, deposits=100)],
+        "2026-06-15",
+        "test",
+    )
+    assert get_cash(conn).warnings == []
+
+    record_cash_reconciliation(
+        conn,
+        [ParsedCashReport("U111111", "RRSP", "USD", 102.01, deposits=100)],
+        "2026-06-15",
+        "test",
+    )
+    warnings = get_cash(conn).warnings
+
+    assert len(warnings) == 1
+    assert warnings[0].check_type == "balance"
+    assert warnings[0].broker_value == 102.01
+    assert warnings[0].derived_value == 100
+    assert round(warnings[0].difference, 2) == 2.01
+
+
+def test_contributions_series_nets_offsetting_pairs_and_total_is_signed():
+    conn = memory_db()
+    append_transactions(
+        conn,
+        [
+            ParsedTransaction("2026-05-01", "IBKR", "U111111", "RRSP", "RRSP", "DEPOSIT", 763.69, "CAD", "test", "C1"),
+            ParsedTransaction("2026-05-01", "IBKR", "U111111", "RRSP", "RRSP", "WITHDRAWAL", -763.69, "CAD", "test", "C2"),
+            ParsedTransaction("2026-05-02", "IBKR", "U111111", "RRSP", "RRSP", "DEPOSIT", 28500, "CAD", "test", "C3"),
+        ],
+    )
     conn.commit()
 
     data = build_dashboard_data(conn)
 
-    assert data.holdings[0].price == 1
-    assert data.holdings[0].market_value_cad == 125
+    assert data.growth_points[0].date == "2026-05-01"
+    assert data.growth_points[0].cumulative_contributions_cad == 0
+    assert data.growth_points[-1].cumulative_contributions_cad == 28500
+    assert data.contributions_total_cad == 28500
+
+
+def test_contributions_reconciliation_detects_short_date_window():
+    conn = memory_db()
+    append_transactions(
+        conn,
+        [ParsedTransaction("2026-05-01", "IBKR", "U111111", "RRSP", "RRSP", "DEPOSIT", 100, "CAD", "test", "C1")],
+    )
+    record_cash_reconciliation(
+        conn,
+        [ParsedCashReport("U111111", "RRSP", "CAD", 100, deposits=150)],
+        "2026-06-15",
+        "test",
+    )
+    warnings = get_cash(conn).warnings
+
+    assert len(warnings) == 1
+    assert warnings[0].check_type == "contributions"
+    assert warnings[0].broker_value == 150
+    assert warnings[0].derived_value == 100
 
 
 def test_reference_data_columns_can_be_updated():

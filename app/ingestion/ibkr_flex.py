@@ -6,7 +6,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
-from app.models import ParsedInstrument, ParsedPosition, ParsedTransaction
+from app.models import ParsedCashReport, ParsedInstrument, ParsedPosition, ParsedTransaction
 from app.repository.instruments import normalize_asset_class
 
 
@@ -19,9 +19,11 @@ def summarize_flex_xml(xml_text: str) -> Dict[str, int]:
         "Trade": 0,
         "Execution": 0,
         "CashTransaction": 0,
+        "CashTransactions": 0,
         "OpenPosition": 0,
         "Position": 0,
         "CashReport": 0,
+        "CashReportCurrency": 0,
     }
     for node in root.iter():
         tag = node.tag.split("}")[-1]
@@ -48,7 +50,7 @@ def _float(value: Optional[str]) -> Optional[float]:
 def _date(value: Optional[str]) -> str:
     if not value:
         return dt.date.today().isoformat()
-    raw = value.strip()
+    raw = value.strip().split(";", 1)[0]
     if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
         return raw[:10]
     if len(raw) >= 8 and raw[:8].isdigit():
@@ -106,28 +108,41 @@ def parse_flex_positions(xml_text: str) -> List[ParsedPosition]:
             )
         )
 
+    return positions
+
+
+def parse_flex_cash_report(xml_text: str) -> List[ParsedCashReport]:
+    root = ET.fromstring(xml_text)
+    cash_reports: List[ParsedCashReport] = []
     for node in root.iter():
-        if node.tag.split("}")[-1] != "CashReport":
+        if node.tag.split("}")[-1] != "CashReportCurrency":
+            continue
+        level = (_attr(node, "levelOfDetail") or "").upper()
+        if level != "CURRENCY":
             continue
         currency = (_attr(node, "currency") or "").upper()
-        quantity = _float(_attr(node, "endingCash", "total", "cash", "settledCash"))
-        if not currency or quantity is None:
+        ending_cash = _float(_attr(node, "endingCash", "total", "cash", "settledCash"))
+        if not currency or ending_cash is None:
             continue
         account_id, account_label = _account(node)
-        positions.append(
-            ParsedPosition(
+        cash_reports.append(
+            ParsedCashReport(
                 account_external_id=account_id,
                 account_label=account_label,
-                asset_class="CASH",
-                symbol="CASH:%s" % currency,
-                name="%s cash" % currency,
                 currency=currency,
-                quantity=quantity,
-                avg_cost=1.0,
-                conid=None,
+                ending_cash=ending_cash,
+                deposits=_float(_attr(node, "deposits", "depositWithdrawals")) or 0.0,
+                withdrawals=_float(_attr(node, "withdrawals")) or 0.0,
+                dividends=_float(_attr(node, "dividends")) or 0.0,
+                from_date=_date(_attr(node, "fromDate")) if _attr(node, "fromDate") else None,
+                to_date=_date(_attr(node, "toDate")) if _attr(node, "toDate") else None,
             )
         )
-    return positions
+    return cash_reports
+
+
+def parse_flex_cash_reports(xml_text: str) -> List[ParsedCashReport]:
+    return parse_flex_cash_report(xml_text)
 
 
 def parse_flex_transactions(xml_text: str, source: str = "ibkr_flex") -> List[ParsedTransaction]:
@@ -199,9 +214,12 @@ def parse_flex_transactions(xml_text: str, source: str = "ibkr_flex") -> List[Pa
 
 
 def _cash_type(raw_type: str, amount: float) -> str:
+    raw_type = raw_type.upper()
+    if "DEPOSIT" in raw_type and "WITHDRAW" in raw_type:
+        return "DEPOSIT" if amount >= 0 else "WITHDRAWAL"
     if "DIV" in raw_type:
         return "DIVIDEND"
-    if "FEE" in raw_type or "WITHHOLD" in raw_type or "TAX" in raw_type:
+    if "FEE" in raw_type or "WITHHOLD" in raw_type or "TAX" in raw_type or "INTEREST" in raw_type:
         return "FEE"
     if "WITHDRAW" in raw_type:
         return "WITHDRAWAL"

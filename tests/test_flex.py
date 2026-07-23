@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from app.ingestion.ibkr_flex import FlexClient, parse_flex_positions, parse_flex_transactions
+from app.ingestion.ibkr_flex import (
+    FlexClient,
+    _cash_type,
+    _date,
+    parse_flex_cash_reports,
+    parse_flex_positions,
+    parse_flex_transactions,
+)
 from app.services.flex import parse_flex_xml
 
 
@@ -11,13 +18,11 @@ def test_parse_flex_xml_filters_supported_positions_and_cash():
 
     positions = parse_flex_xml(xml_text)
 
-    assert [position.symbol for position in positions] == ["AAPL", "XIC", "CASH:USD"]
+    assert [position.symbol for position in positions] == ["AAPL", "XIC"]
     assert positions[0].account_label == "RRSP"
     assert positions[0].quantity == 10
     assert positions[0].avg_cost == 150.0
     assert positions[0].conid == "265598"
-    assert positions[2].asset_class == "CASH"
-    assert positions[2].quantity == 1250.50
 
 
 def test_parse_flex_transactions_normalizes_trades_and_cash_flows():
@@ -25,12 +30,34 @@ def test_parse_flex_transactions_normalizes_trades_and_cash_flows():
 
     transactions = parse_flex_transactions(xml_text)
 
-    assert [txn.txn_type for txn in transactions] == ["BUY", "SELL", "BUY", "DEPOSIT", "DIVIDEND"]
+    assert [txn.txn_type for txn in transactions] == [
+        "BUY",
+        "SELL",
+        "BUY",
+        "DEPOSIT",
+        "DEPOSIT",
+        "WITHDRAWAL",
+        "DIVIDEND",
+        "DIVIDEND",
+        "FEE",
+        "FEE",
+    ]
     assert transactions[0].instrument.symbol == "AAPL"
     assert transactions[0].quantity == 10
     assert transactions[0].amount == -1501
     assert transactions[1].txn_type == "SELL"
     assert transactions[1].amount == 700
+    assert transactions[4].txn_date == "2026-05-01"
+    signed_contributions = sum(
+        txn.amount for txn in transactions if txn.txn_type in {"DEPOSIT", "WITHDRAWAL"} and txn.currency == "CAD"
+    )
+    positive_only = sum(
+        txn.amount
+        for txn in transactions
+        if txn.txn_type in {"DEPOSIT", "WITHDRAWAL"} and txn.currency == "CAD" and txn.amount > 0
+    )
+    assert signed_contributions == 28500
+    assert positive_only == 29263.69
 
 
 def test_parse_flex_positions_keeps_reconciliation_shape():
@@ -40,6 +67,33 @@ def test_parse_flex_positions_keeps_reconciliation_shape():
 
     assert positions[0].asset_class == "EQUITY"
     assert positions[1].asset_class == "ETF"
+
+
+def test_parse_flex_cash_reports_extracts_native_cash_report():
+    xml_text = Path("tests/fixtures/sample_flex.xml").read_text()
+
+    cash_reports = parse_flex_cash_reports(xml_text)
+
+    assert [report.currency for report in cash_reports] == ["CAD", "USD"]
+    assert cash_reports[0].account_label == "U111111"
+    assert cash_reports[0].ending_cash == 28500
+    assert cash_reports[0].deposits == 28500
+    assert cash_reports[0].from_date == "2026-01-01"
+    assert cash_reports[1].ending_cash == -9657.98
+
+
+def test_flex_date_parses_timestamped_and_date_only_values():
+    assert _date("20260611;202000") == "2026-06-11"
+    assert _date("20260323") == "2026-03-23"
+    assert _date("2026-06-11") == "2026-06-11"
+
+
+def test_cash_type_maps_observed_ibkr_cash_vocabulary():
+    assert _cash_type("Broker Interest Paid", -2.50) == "FEE"
+    assert _cash_type("Withholding Tax", -1.50) == "FEE"
+    assert _cash_type("Payment In Lieu Of Dividends", 5.0) == "DIVIDEND"
+    assert _cash_type("Deposits/Withdrawals", 10.0) == "DEPOSIT"
+    assert _cash_type("Deposits/Withdrawals", -10.0) == "WITHDRAWAL"
 
 
 def test_reference_code_error_includes_ibkr_response_details():

@@ -137,45 +137,6 @@ def rebuild_positions(conn: sqlite3.Connection, snapshot_date: str) -> int:
         )
         inserted += 1
 
-    cash_rows = conn.execute(
-        """
-        SELECT account_id, currency, SUM(amount) AS amount
-        FROM transactions
-        GROUP BY account_id, currency
-        HAVING ABS(amount) > 1e-9
-        """
-    ).fetchall()
-    for row in cash_rows:
-        instrument_id = upsert_instrument(
-            conn,
-            ParsedInstrument(
-                asset_class="CASH",
-                symbol="CASH:%s" % row["currency"],
-                name="%s cash" % row["currency"],
-                currency=row["currency"],
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO positions
-                (snapshot_date, account_id, instrument_id, quantity, avg_cost, cost_currency)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(snapshot_date, account_id, instrument_id) DO UPDATE SET
-                quantity = excluded.quantity,
-                avg_cost = excluded.avg_cost,
-                cost_currency = excluded.cost_currency,
-                source = 'derived_transactions'
-            """,
-            (
-                snapshot_date,
-                row["account_id"],
-                instrument_id,
-                float(row["amount"]),
-                1.0,
-                row["currency"],
-            ),
-        )
-        inserted += 1
     return inserted
 
 
@@ -234,3 +195,4 @@ def record_reconciliation(
         )
         inserted += 1
     return inserted
+

@@ -8,15 +8,24 @@
         <Trade accountId="U111111" acctAlias="RRSP" conid="756733" symbol="XIC" description="ISHARES CORE S&amp;P TSX CAPPED COMP" assetCategory="ETF" currency="CAD" tradeDate="2026-06-12" buySell="BUY" quantity="20" tradePrice="32.00" proceeds="-640.00" tradeID="T3" />
       </Trades>
       <CashTransactions>
-        <CashTransaction accountId="U111111" acctAlias="RRSP" currency="USD" dateTime="2026-06-09" type="Deposit" amount="2000.00" transactionID="C1" />
-        <CashTransaction accountId="U111111" acctAlias="RRSP" currency="USD" dateTime="2026-06-13" type="Dividend" amount="12.00" transactionID="C2" />
+        <CashTransaction accountId="U111111" acctAlias="" currency="CAD" dateTime="20260323" type="Deposits/Withdrawals" amount="28500.00" transactionID="C1" levelOfDetail="DETAIL" />
+        <CashTransaction accountId="U111111" acctAlias="" currency="CAD" dateTime="20260501;202000" type="Deposits/Withdrawals" amount="763.69" transactionID="C2" levelOfDetail="DETAIL" />
+        <CashTransaction accountId="U111111" acctAlias="" currency="CAD" dateTime="20260501;202500" type="Deposits/Withdrawals" amount="-763.69" transactionID="C3" levelOfDetail="DETAIL" />
+        <CashTransaction accountId="U111111" acctAlias="" currency="USD" dateTime="2026-06-13" type="Dividends" amount="12.00" transactionID="C4" levelOfDetail="DETAIL" />
+        <CashTransaction accountId="U111111" acctAlias="" currency="USD" dateTime="20260614;090000" type="Payment In Lieu Of Dividends" amount="5.00" transactionID="C5" levelOfDetail="DETAIL" />
+        <CashTransaction accountId="U111111" acctAlias="" currency="USD" dateTime="20260615;090000" type="Withholding Tax" amount="-1.50" transactionID="C6" levelOfDetail="DETAIL" />
+        <CashTransaction accountId="U111111" acctAlias="" currency="USD" dateTime="20260616;090000" type="Broker Interest Paid" amount="-2.50" transactionID="C7" levelOfDetail="DETAIL" />
       </CashTransactions>
       <OpenPositions>
         <OpenPosition accountId="U111111" acctAlias="RRSP" conid="265598" symbol="AAPL" description="APPLE INC" assetCategory="STK" currency="USD" position="10" costBasisPrice="150.00" />
         <OpenPosition accountId="U111111" acctAlias="RRSP" conid="756733" symbol="XIC" description="ISHARES CORE S&amp;P TSX CAPPED COMP" assetCategory="ETF" currency="CAD" position="20" costBasisPrice="32.00" />
         <OpenPosition accountId="U111111" acctAlias="RRSP" conid="999999" symbol="OPT" description="IGNORED OPTION" assetCategory="OPT" currency="USD" position="1" costBasisPrice="1.00" />
       </OpenPositions>
-      <CashReport accountId="U111111" acctAlias="RRSP" currency="USD" endingCash="1250.50" />
+      <CashReport>
+        <CashReportCurrency accountId="U111111" acctAlias="" currency="BASE_SUMMARY" levelOfDetail="BaseCurrency" endingCash="10000.00" deposits="28500.00" withdrawals="0.00" dividends="17.00" fromDate="20260101" toDate="20260720" />
+        <CashReportCurrency accountId="U111111" acctAlias="" currency="CAD" levelOfDetail="Currency" endingCash="28500.00" deposits="28500.00" withdrawals="0.00" dividends="0.00" fromDate="20260101" toDate="20260720" />
+        <CashReportCurrency accountId="U111111" acctAlias="" currency="USD" levelOfDetail="Currency" endingCash="-9657.98" deposits="0.00" withdrawals="0.00" dividends="17.00" fromDate="20260101" toDate="20260720" />
+      </CashReport>
     </FlexStatement>
   </FlexStatements>
 </FlexQueryResponse>

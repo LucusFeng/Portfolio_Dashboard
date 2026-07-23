@@ -7,6 +7,7 @@ from app.db import connect, init_db, transaction
 from app.ingestion.cibc_csv import parse_cibc_transactions
 from app.ingestion.ibkr_flex import (
     FlexClient,
+    parse_flex_cash_reports,
     parse_flex_positions,
     parse_flex_transactions,
     summarize_flex_xml,
@@ -14,6 +15,7 @@ from app.ingestion.ibkr_flex import (
 )
 from app.ingestion.ibkr_gateway import GatewayAuthError, GatewayClient, current_fx_mark
 from app.ingestion.reference_data import YFinanceProvider
+from app.repository.cash import record_cash_reconciliation, upsert_cash_balances
 from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
 from app.repository.positions import rebuild_derived_state, record_reconciliation
 from app.repository.runs import record_run
@@ -65,8 +67,11 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
     snapshot_date = today_snapshot_date()
     inserted = 0
     reconciled = 0
+    cash_reconciled = 0
+    cash_balances = 0
     parsed_transactions_count = 0
     parsed_positions_count = 0
+    parsed_cash_reports_count = 0
     section_counts = []
     lots = 0
     positions = 0
@@ -83,13 +88,15 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
                         summary["Execution"],
                         summary["CashTransaction"],
                         summary["OpenPosition"] + summary["Position"],
-                        summary["CashReport"],
+                        summary["CashReportCurrency"] or summary["CashReport"],
                     )
                 )
                 parsed_transactions = parse_flex_transactions(xml_text, source="ibkr_flex_%s" % login_name)
                 parsed_positions = parse_flex_positions(xml_text)
+                parsed_cash_reports = parse_flex_cash_reports(xml_text)
                 parsed_transactions_count += len(parsed_transactions)
                 parsed_positions_count += len(parsed_positions)
+                parsed_cash_reports_count += len(parsed_cash_reports)
                 inserted += append_transactions(conn, parsed_transactions)
                 lots, positions = rebuild_derived_state(conn, snapshot_date)
                 reconciled += record_reconciliation(
@@ -97,6 +104,18 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
                     parsed_positions,
                     snapshot_date,
                     "IBKR Flex %s positions" % login_name,
+                )
+                cash_reconciled += record_cash_reconciliation(
+                    conn,
+                    parsed_cash_reports,
+                    snapshot_date,
+                    "IBKR Flex %s cash reports" % login_name,
+                )
+                cash_balances += upsert_cash_balances(
+                    conn,
+                    parsed_cash_reports,
+                    snapshot_date,
+                    "IBKR Flex %s cash reports" % login_name,
                 )
             status = "success"
             hint = ""
@@ -108,16 +127,19 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
                 "transactions",
                 status,
                 (
-                    "Parsed %s transactions/%s broker positions; inserted %s transactions; "
-                    "rebuilt %s lots/%s positions; reconciled %s rows.%s %s"
+                    "Parsed %s transactions/%s broker positions/%s cash reports; inserted %s transactions; "
+                    "rebuilt %s lots/%s positions; stored %s cash balances; reconciled %s position rows/%s cash checks.%s %s"
                 )
                 % (
                     parsed_transactions_count,
                     parsed_positions_count,
+                    parsed_cash_reports_count,
                     inserted,
                     lots,
                     positions,
+                    cash_balances,
                     reconciled,
+                    cash_reconciled,
                     hint,
                     " | ".join(section_counts),
                 ),

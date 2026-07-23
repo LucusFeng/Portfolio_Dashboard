@@ -53,6 +53,8 @@ the derived positions.
 - `prices`: append-only price observations.
 - `fx_rates`: append-only FX observations.
 - `reconciliations`: broker quantity vs derived quantity checks.
+- `cash_balances`: latest broker-reported cash balances by account/currency.
+- `cash_reconciliations`: broker-vs-derived balance and contribution checks.
 - `ingestion_runs`: status messages for dashboard refresh actions.
 
 The schema is versioned in `app/repository/db.py`. Because this was a development schema
@@ -74,9 +76,11 @@ GET /
 The dashboard now shows:
 
 - account summaries
+- dedicated cash balances
 - consolidated holdings
 - account drilldown
 - reconciliation warnings
+- cash reconciliation warnings
 - batch/open-lot PnL
 - cumulative contributions
 
@@ -89,6 +93,8 @@ POST /refresh/transactions
   -> transactions are deduped by source/external_id
   -> lots and positions are rebuilt
   -> Flex open positions are parsed for reconciliation
+  -> Flex CashReportCurrency rows are stored as cash balances
+  -> CashReportCurrency values are reconciled against dated cash transactions
   -> ingestion run status is recorded
 ```
 
@@ -151,16 +157,25 @@ the codebase.
 
 ## How Cash Works Now
 
-Cash is derived from every transaction amount in the account/currency:
+Cash is no longer stored as a synthetic `CASH:*` position.
 
-- deposits increase cash
-- withdrawals decrease cash
-- buys decrease cash
-- sells increase cash
-- dividends increase cash
-- fees decrease cash
+For dashboard display, cash comes from IBKR `CashReportCurrency endingCash`, stored in
+`cash_balances` by account and currency. This makes broker cash the displayed cash source,
+including negative USD margin balances.
 
-That means cash is part of the transaction ledger, not a manually maintained position.
+Dated `CashTransactions` still matter. They restore the contribution series:
+
+- `Deposits/Withdrawals` rows are summed with their signed amounts.
+- Positive and negative reversal pairs net to zero.
+- The cumulative contribution line can step down when a reversal or withdrawal appears.
+
+Cash reconciliation writes two checks per account/currency:
+
+- `balance`: CashReport `endingCash` vs full-ledger transaction sum.
+- `contributions`: CashReport deposits/withdrawals vs dated deposit/withdrawal sum.
+
+Differences above `1.0` are warnings. A contribution mismatch usually means the Flex query
+date range does not cover full account history.
 
 ## How To Inspect The Database
 
@@ -175,7 +190,9 @@ Useful queries:
 SELECT * FROM transactions;
 SELECT * FROM lots;
 SELECT * FROM positions;
+SELECT * FROM cash_balances;
 SELECT * FROM reconciliations;
+SELECT * FROM cash_reconciliations;
 SELECT * FROM ingestion_runs;
 .quit
 ```
@@ -195,8 +212,9 @@ The suite covers:
 - CIBC CSV parsing
 - transaction deduplication
 - lot and position derivation
-- cash derivation from trade and cash-flow amounts
-- contribution series
+- cash balance display from CashReportCurrency
+- cash reconciliation tolerance
+- signed contribution series from dated CashTransactions
 - batch PnL
 - reference-data schema readiness
 

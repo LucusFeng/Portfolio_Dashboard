@@ -1,26 +1,62 @@
 # Personal Investment Ecosystem
 
-A local-first platform that consolidates holdings across multiple brokerage accounts and
-grows into a portfolio analysis system. **Phase 1** is a centralized portfolio dashboard —
-the cornerstone that every later phase reads from.
+A local-first suite for managing personal portfolios and analyzing markets. It is built as
+**two clusters of apps** over a shared foundation: a *portfolio-coupled* cluster (which reads
+your holdings) and a set of *standalone market-data apps* (which do not). **Phase 1** is the
+portfolio dashboard — the infrastructure layer the coupled cluster is built on, and it must
+be solid before anything else is built.
 
 ---
 
 ## Vision
 
-This is not a single app — it's the foundation of a personal investment ecosystem, built in
-phases on one shared data store:
+This is not a single app — it's an ecosystem. The pieces split by **one question: does this
+app consume my portfolio, or just the market?** That line, not a phase number, is the real
+architectural seam.
 
-- **Phase 1 — Consolidated dashboard.** Unified positions, market value, and PnL across all
-  accounts, normalized to CAD. Plus batch (lot-level) PnL tracking and a portfolio
-  value-vs-contributions growth chart. *(This document's primary scope.)*
-- **Phase 2 — Grouping.** Group positions into categories based on stock characteristics.
-- **Phase 3 — Stock analysis.** Identify key factors that drive individual stock performance.
-- **Phase 4 — Market sentiment.** Sentiment analysis layered onto holdings.
-- **Phase 5 — Option hedging.** Hedge recommendations against held exposure.
+### Portfolio-coupled cluster (tabs in one frontend, one shared backend)
 
-Phases 2–5 contain real nuance and will be designed later. Phase 1's job is to build the
-**platform** so those phases are *additive*, not rewrites.
+These read your holdings/transactions and join on *your* instruments. They share a service
+layer (the internal API) and live as tabs in a single frontend.
+
+- **Portfolio dashboard (Phase 1).** Unified positions, market value, and PnL across all
+  accounts, normalized to CAD; batch (lot-level) PnL; cash; contributions; a daily
+  value-vs-contributions history. *(This document's primary scope — the infrastructure the
+  rest of the coupled cluster stands on.)*
+- **Position management & grouping.** Group holdings by characteristics; manage exposure.
+- **Stock analysis of holdings.** Factors driving the performance of securities you hold.
+- **Option hedging ideas.** Hedge suggestions against *your* held exposure. (Sits on the
+  seam — see below.)
+
+### Standalone market-data apps (separate web apps, separate deploys)
+
+These are functions of *the market*, not *your book*. They score or price a security whether
+or not you hold it, so they are separate apps with their own backends.
+
+- **Market sentiment.** A market-data pipeline: ingest feeds, score tickers, serve by symbol.
+- **Option calculator.** Near-pure computation: spot/strike/expiry/vol/rate → price + greeks.
+
+### How the two clusters relate (the dependency rule)
+
+The standalone apps stay **portfolio-agnostic at their core**. When you want "sentiment for
+*my* holdings" or "a hedge against *my* AAPL," the **coupled cluster passes instruments into
+the standalone app** — the standalone app never reaches into your holdings. Dependency arrow:
+**coupled → standalone, never the reverse.** This keeps the calculator an importable library,
+sentiment a market pipeline, and your holdings from leaking into apps that shouldn't own that
+concern.
+
+**The one thing shared across the whole ecosystem is instrument identity** — the canonical
+"what security is this" vocabulary that both clusters join on. For now it lives inside the
+portfolio backend (see *Open Questions*), but its schema is treated as ecosystem-facing:
+stable IDs, clean symbol/conid resolution, no portfolio-specific assumptions on the
+instrument row — so extraction stays cheap if a second app ever needs to mint or resolve
+instruments independently.
+
+**Scope discipline is the real risk, not architecture.** The failure mode for an ambitious
+solo project is building horizontally across every app at 20% depth and finishing none. The
+rule: get Phase 1 genuinely *done* — cash correct, reconciliation trustworthy, daily history
+captured — before any coupled-cluster Phase 2+ code, and before the standalone apps are more
+than sketches. A rock-solid Phase 1 is what makes the rest credible.
 
 ---
 
@@ -48,23 +84,38 @@ modeling, and a Python web backend.
 
 ## Architecture: Build a Platform, Not an App
 
-Three layers that don't know about each other. Dependencies point downward only. The
-Phase 1 dashboard is just the *first consumer* of the canonical store; every later phase is
-another consumer reading through the same service interface.
+The **portfolio-coupled cluster** is three layers that don't know about each other;
+dependencies point downward only. The Phase 1 dashboard is just the *first consumer* of the
+canonical store; every other coupled app is another consumer reading through the same service
+interface. The **standalone apps** sit beside this stack, not on top of it — they are called
+*into* by the coupled cluster (passed instruments), and share only instrument identity.
 
 ```
-CONSUMERS        Phase 1 dashboard │ P2 groups │ P3 factors │ P4 sentiment │ P5 hedging
-                                   │           │            │              │
-                 ──────────────────┴───────────┴────────────┴──────────────┴────────
-SERVICE LAYER    get_consolidated_positions() / get_instrument() / get_pnl() ...
-                 (the internal API — no SQL above this line)
-                 ────────────────────────────────────────────────────────────────────
-DATA STORE       transactions → lots → positions │ instruments │ observations (prices, fx, ...)
-                 (canonical, append-only; transactions are the source of truth)
-                 ────────────────────────────────────────────────────────────────────
-INGESTION        IBKR Flex │ CIBC CSV │ IBKR gateway prices │ FX │ reference data
-                 (the only code that writes raw external data)
+                                          coupled cluster calls  ┌──────────────────────────┐
+                                          INTO standalone apps → │ STANDALONE MARKET-DATA   │
+                                          (passing instruments)  │ APPS (separate deploys)  │
+                                                                 │  • sentiment pipeline    │
+COUPLED CLUSTER (one frontend, tabs)                             │  • option calculator     │
+CONSUMERS   dashboard │ position mgmt │ stock analysis │ hedging │ (portfolio-agnostic core) │
+                      │               │                │        └───────────┬──────────────┘
+            ──────────┴───────────────┴────────────────┴──────┐             │
+SERVICE     get_consolidated_positions() / get_pnl() ...      │             │ both join on
+            (internal API — no SQL above this line)            │             │ instrument
+            ───────────────────────────────────────────────── │             │ identity
+DATA STORE  transactions → lots → positions │ cash │           │   ┌─────────┴─────────┐
+            observations (prices, fx, ...)  │ instruments  ◄───┼───┤ INSTRUMENT        │
+            (canonical, append-only; transactions are truth)  │   │ IDENTITY          │
+            ───────────────────────────────────────────────── │   │ (ecosystem-shared;│
+INGESTION   IBKR Flex │ CIBC CSV │ gateway prices │ FX │ ref   │   │ lives here for now)│
+            (the only code that writes raw external data)      │   └───────────────────┘
 ```
+
+**The dependency rule, restated:** coupled → standalone, never the reverse. Sentiment and the
+calculator never import the portfolio backend; the dashboard (or hedging tab) hands them a
+list of instruments and consumes their per-instrument output. **Hedging is the one app on the
+seam** — it needs the calculator's machinery *and* your exposure — so the calculator's core is
+kept as an importable, portfolio-agnostic library the coupled cluster can call, not only a web
+app.
 
 ### Four decisions that make Phase 1 scale (cheap now, expensive to retrofit)
 
@@ -75,17 +126,45 @@ INGESTION        IBKR Flex │ CIBC CSV │ IBKR gateway prices │ FX │ refer
    column for everything discovered later — new analysis dimensions without migrations.
 
 2. **Every external fact is a timestamped, append-only observation** (`instrument_id` +
-   `as_of` + `source`). Prices and FX establish the pattern in Phase 1; sentiment and
-   factor exposures reuse the identical shape later — giving historical series and
-   backtestability "for free."
+   `as_of` + `source`). Prices and FX establish the pattern in Phase 1; factor exposures and
+   (in the standalone app) sentiment scores reuse the identical shape — giving historical
+   series and backtestability "for free." This pattern is the platform's crown jewel: keep
+   the observation table genuinely generalized, not a prices table wearing a coat, or every
+   later series pays a migration tax. **Note:** an *opinion* (a hedge recommendation, a
+   buy/sell idea) is **not** an observation — it's a recomputable service output and must
+   never be persisted as if it were a fact. Store raw scores; compute opinions on read.
 
-3. **A service layer sits between data and consumers.** The dashboard (and every later
-   phase) calls service functions, never SQL. The service layer is the internal API; a
-   future REST API just wraps it.
+3. **A service layer sits between data and consumers.** The **coupled-cluster** apps call
+   service functions, never SQL — this is the internal API they share, and the boundary must
+   be hard *within* that cluster. (The standalone apps have their own backends and don't
+   pressure this boundary; Python calls between coupled apps are fine for a long while, no
+   premature REST needed.) A future REST API just wraps the service layer.
 
 4. **Instrument identity is bulletproof, with a self-reference for derivatives.** A stable
-   internal ID plus an optional `underlying_instrument_id` means Phase 5 options can point
-   at their underlying without restructuring the core entity.
+   internal ID plus an optional `underlying_instrument_id` means options can point at their
+   underlying without restructuring the core entity. Because instrument identity is the one
+   join key shared across the *entire* ecosystem (both clusters), it is worth over-investing
+   in relative to what the dashboard alone would justify — a messy instrument table poisons
+   every app that joins on it.
+
+---
+
+## Open Questions (deliberately unresolved)
+
+- **Extract instrument identity into its own shared service?** Today only the portfolio
+  backend mints instruments, so extraction now would be premature abstraction — and the
+  coupled → standalone dependency rule *reduces* the pressure (the dashboard hands sentiment
+  a list of instruments, so sentiment needs no independent access to the identity layer).
+  **Decision criterion:** revisit only when a *second* instrument-minting consumer appears
+  (e.g. the sentiment app wants to discover and persist tickers you don't hold). Until then:
+  design for extraction, don't extract. Keep the instrument row portfolio-agnostic so the
+  future move is cheap.
+- **Who may mint instruments?** If a standalone app ever discovers securities outside your
+  holdings, that's a write path into the shared identity vocabulary. For now, the portfolio
+  backend is the sole minter; standalone apps only *receive* identity.
+- **Daily value history requires a scheduler, and it only fills forward.** See *Data
+  Sources → Daily history & backfill* below. This is the main open build item gating the
+  value-vs-contributions chart.
 
 ---
 
@@ -114,14 +193,19 @@ aggregate positions — average cost throws away the per-batch detail. So transa
 the foundation: positions are *derived* from them (sum the lots), not vice versa.
 
 - **IBKR (RRSP, Margin, Corporate) — Flex Web Service.** The Flex query includes a trades /
-  executions section plus a cash-transactions (deposits / withdrawals) section. Stateless
-  token + query ID per login (login1 for RRSP + Margin, login2 for Corporate).
+  executions section. Stateless token + query ID per login (login1 for RRSP + Margin, login2
+  for Corporate).
 - **CIBC (TFSA) — manual CSV upload.** Transaction-history CSV export; a parser maps CIBC's
   columns into the canonical transaction model.
 
-Transactions cover buys, sells, deposits, withdrawals, dividends, and fees. Deposits and
-withdrawals do double duty — they're both the contributions series and part of the full
-cash-flow picture.
+**Cash — current state.** The live Flex query returns a **CashReport** (per-currency summary
+totals: `endingCash`, `deposits`, `withdrawals`, `dividends`, …) but **no dated
+`CashTransactions` rows** — Cash Transactions is a *separate, selectable* Flex section that
+is not yet enabled. So today: cash *balances* and a contributions *total* come from the
+CashReport summary; there is no dated per-deposit series. Enabling the **Cash Transactions**
+section (with a date range back to account inception) unlocks the dated contributions series
+— and that backfill is reconcilable against the CashReport `deposits` total. Trades already
+provide full historical buy/sell detail regardless.
 
 ### Positions (derived + reconciled)
 - Positions are **derived** from the transaction log as a daily snapshot.
@@ -135,6 +219,36 @@ cash-flow picture.
   via the history endpoint (`/iserver/marketdata/history`), which sidesteps the snapshot
   endpoint's prime-then-read flow and is sufficient for daily marks.
 - **FX (USDCAD)** fetched alongside, stored append-only.
+
+### Daily history & backfill (the time-series foundation)
+The Flex refresh is best understood as an **EOD snapshot**: one click captures the current
+state. Two different time series come out of this, with different mechanics:
+
+- **Contribution series → backfillable from history *now*.** Once Cash Transactions is
+  enabled, the entire dated deposit/withdrawal history reconstructs from Flex in one fetch —
+  no waiting. Trades are already fully historical.
+- **Portfolio *value* series → only fills forward.** Daily value is
+  `positions × prices × FX` per day, and the gateway history endpoint as used
+  (`period=1d, bar=1d`) captures ~today's close. Past daily marks can't be reconstructed by a
+  scheduler that starts now — it accumulates going forward. (A one-time wider fetch, e.g.
+  `period=1m, bar=1d`, can *seed* some recent price history to avoid starting the value line
+  from a single point — coverage varies by holding.)
+
+**Implication:** a value time-series dashboard needs a **scheduler** (APScheduler or an async
+loop) firing the refresh once per EOD, writing one snapshot/day. Two operational notes: (1)
+positions are keyed by `snapshot_date`, so the table already supports this — but the daily
+series only densifies on days the job runs; (2) the **price** refresh needs an authenticated
+gateway session that day (stateless Flex token handles transactions/cash unattended; prices
+do **not** — session times out ~6 min idle, resets daily, needs manual 2FA). So a fully
+hands-off EOD job is straightforward for transactions/cash and constrained for prices.
+
+> **Persistence model at a glance.** `transactions` = append-only, deduped (never lost).
+> `lots` = fully deleted & rebuilt each refresh (pure derivation). `positions` = overwritten
+> *within* a `snapshot_date`, preserved *across* dates. `prices`/`fx_rates` = append-only by
+> `as_of`. `reconciliations` = append-only, unbounded. `instruments`/`accounts` = upserted in
+> place. Separately, a **schema-version bump wipes all app tables** (including `transactions`)
+> and rebuilds — fine while Flex covers the needed range, but it means the local SQLite file
+> is not yet a durable archive of source-of-truth data.
 
 ### Reference data (sector, industry, market cap, country)
 IBKR is **not** used for this. IBKR returns contract-level basics (asset class, exchange)
@@ -425,15 +539,28 @@ login.
 - [ ] Resilient to a dropped price session (clear re-auth prompt, no silent stale data).
 - [ ] Position snapshot keeps working even if the price gateway is down.
 
-### Later phases (designed-for, not built)
-- [ ] **P2:** Group positions by characteristics (queries over instrument reference data).
-- [ ] **P3:** Individual stock factor analysis.
-- [ ] **P4:** Market sentiment (new observation table, same shape as prices).
-- [ ] **P5:** Option hedge recommendations (uses `underlying_instrument_id`; net delta-adjusted exposure).
+### Beyond Phase 1 (designed-for, not built)
+
+**Coupled cluster (tabs, shared backend — read holdings):**
+- [ ] Group positions by characteristics (queries over instrument reference data).
+- [ ] Stock factor analysis for held securities.
+- [ ] Option hedge *ideas* against held exposure (calls the standalone calculator's library;
+      uses `underlying_instrument_id`; net delta-adjusted exposure). Opinions computed on
+      read, never persisted as facts.
+- [ ] Daily value-vs-contributions history (needs the scheduler; see *Daily history*).
+
+**Standalone apps (separate deploys — market-data, portfolio-agnostic core):**
+- [ ] Market sentiment pipeline (new observation table, same shape as prices; served by
+      symbol; the coupled cluster passes in instruments to get "sentiment for my holdings").
+- [ ] Option calculator (spot/strike/expiry/vol/rate → price + greeks; importable library
+      *and* web app, so hedging can call it).
+
+**Cross-cutting refinements:**
 - [ ] Tax-accurate realized PnL (CRA adjusted cost base / ACB — average-cost, not FIFO);
       Phase 1's batch view is *unrealized* per-open-lot only.
 - [ ] Money-weighted (IRR) / time-weighted returns, immune to deposit timing.
-- [ ] Exposure/overlap analysis, tax-aware insights, scheduled price refresh.
+- [ ] Exposure/overlap analysis, tax-aware insights, scheduled EOD refresh.
+- [ ] Durable archive of source-of-truth data that survives schema-version bumps.
 
 ---
 

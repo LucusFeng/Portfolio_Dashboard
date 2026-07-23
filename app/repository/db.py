@@ -4,9 +4,11 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 TABLES = [
+    "cash_reconciliations",
+    "cash_balances",
     "reconciliations",
     "ingestion_runs",
     "fx_rates",
@@ -147,6 +149,33 @@ CREATE TABLE IF NOT EXISTS reconciliations (
     instrument_id INTEGER NOT NULL REFERENCES instruments(id),
     broker_quantity REAL NOT NULL,
     derived_quantity REAL NOT NULL,
+    difference REAL NOT NULL,
+    status TEXT NOT NULL,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS cash_balances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_date TEXT NOT NULL,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    currency TEXT NOT NULL,
+    ending_cash REAL NOT NULL,
+    deposits REAL NOT NULL DEFAULT 0,
+    withdrawals REAL NOT NULL DEFAULT 0,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (snapshot_date, account_id, currency)
+);
+
+CREATE TABLE IF NOT EXISTS cash_reconciliations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_date TEXT NOT NULL,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    currency TEXT NOT NULL,
+    check_type TEXT NOT NULL,
+    broker_value REAL NOT NULL,
+    derived_value REAL NOT NULL,
     difference REAL NOT NULL,
     status TEXT NOT NULL,
     source TEXT NOT NULL,

@@ -26,6 +26,19 @@ class ParsedPosition:
 
 
 @dataclass(frozen=True)
+class ParsedCashReport:
+    account_external_id: str
+    account_label: str
+    currency: str
+    ending_cash: float
+    deposits: float = 0.0
+    withdrawals: float = 0.0
+    dividends: float = 0.0
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class ParsedTransaction:
     txn_date: str
     broker: str

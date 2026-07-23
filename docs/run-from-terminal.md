@@ -259,6 +259,10 @@ rm -f data/portfolio.sqlite3
 python -m uvicorn app.main:app --reload
 ```
 
+The current schema keeps cash out of synthetic `CASH:*` positions. Cash appears in its own
+dashboard section from IBKR `CashReportCurrency endingCash`, while dated
+`CashTransactions` drive the contributions series.
+
 ### IBKR Flex Certificate Error
 
 If **Refresh transactions** records an error like:
@@ -292,7 +296,8 @@ until trades and cash flows are present.
 Fix this in IBKR Flex Query setup:
 
 - Include **Trades** or **Executions**.
-- Include **Cash Transactions**.
+- Include **Cash Transactions** for dated contributions.
+- Include **Cash Report / CashReportCurrency** for broker cash balances.
 - Include **Open Positions** for reconciliation.
 - Use a date range that covers the history needed to reconstruct current holdings, not
   only today or the current statement period.

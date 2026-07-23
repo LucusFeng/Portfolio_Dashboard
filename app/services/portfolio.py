@@ -62,9 +62,6 @@ def to_cad(value: float, currency: str, usdcad: Optional[float]) -> Optional[flo
 def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
     currency = row["price_currency"] or row["instrument_currency"]
     price = row["price"]
-    if row["asset_class"] == "CASH" and price is None:
-        price = 1.0
-        currency = row["instrument_currency"]
 
     market_value = None
     market_value_cad = None

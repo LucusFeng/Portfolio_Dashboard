@@ -6,7 +6,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
-from app.models import ParsedCashReport, ParsedInstrument, ParsedPosition, ParsedTransaction
+from app.models import ParsedCashReport, ParsedInstrument, ParsedPosition, ParsedPositionValue, ParsedTransaction
 from app.repository.instruments import normalize_asset_class
 
 
@@ -109,6 +109,42 @@ def parse_flex_positions(xml_text: str) -> List[ParsedPosition]:
         )
 
     return positions
+
+
+def parse_flex_position_values(xml_text: str) -> List[ParsedPositionValue]:
+    root = ET.fromstring(xml_text)
+    values: List[ParsedPositionValue] = []
+
+    for node in root.iter():
+        tag = node.tag.split("}")[-1]
+        if tag not in {"OpenPosition", "Position"}:
+            continue
+        instrument = _instrument_from_node(node)
+        if instrument is None:
+            continue
+        quantity = _float(_attr(node, "position", "quantity", "qty"))
+        value_native = _float(_attr(node, "positionValue"))
+        value_base = _float(_attr(node, "positionValueInBase"))
+        if quantity is None or value_native is None or value_base is None:
+            continue
+        account_id, account_label = _account(node)
+        values.append(
+            ParsedPositionValue(
+                account_external_id=account_id,
+                account_label=account_label,
+                asset_class=instrument.asset_class,
+                symbol=instrument.symbol,
+                name=instrument.name,
+                currency=instrument.currency,
+                value_native=value_native,
+                value_base=value_base,
+                fx_rate_to_base=_float(_attr(node, "fxRateToBase")),
+                quantity=quantity,
+                conid=instrument.conid,
+            )
+        )
+
+    return values
 
 
 def parse_flex_cash_report(xml_text: str) -> List[ParsedCashReport]:

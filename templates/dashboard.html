@@ -15,6 +15,8 @@
       --accent: #0f766e;
       --warn: #b45309;
       --bad: #b91c1c;
+      --profit: #047857;
+      --loss: #b91c1c;
     }
     * { box-sizing: border-box; }
     body {
@@ -92,6 +94,8 @@
     td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     .muted { color: var(--muted); }
     .warn { color: var(--warn); font-weight: 650; }
+    .profit { color: var(--profit); font-weight: 650; }
+    .loss { color: var(--loss); font-weight: 650; }
     .empty { padding: 24px 8px; color: var(--muted); }
   </style>
 </head>
@@ -247,7 +251,7 @@
         <thead>
           <tr>
             <th>Symbol</th><th>Name</th><th>Class</th><th class="num">Qty</th>
-            <th class="num">Price</th><th class="num">Value CAD</th><th>Status</th>
+            <th>Value source</th><th class="num">Price</th><th class="num">Value CAD</th><th>Status</th>
           </tr>
         </thead>
         <tbody>
@@ -257,6 +261,7 @@
             <td>{{ row.name }}</td>
             <td>{{ row.asset_class }}</td>
             <td class="num">{{ "%.4f"|format(row.quantity) }}</td>
+            <td>{{ row.value_source }}</td>
             <td class="num">{% if row.price is not none %}{{ "%.2f"|format(row.price) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
             <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
@@ -272,7 +277,7 @@
         <thead>
           <tr>
             <th>Account</th><th>Symbol</th><th>Name</th><th>Class</th><th class="num">Qty</th>
-            <th class="num">Avg cost</th><th class="num">Price</th><th class="num">Value CAD</th><th class="num">Unrealized PnL</th><th>Status</th>
+            <th class="num">Avg cost</th><th>Value source</th><th class="num">Price</th><th class="num">Value CAD</th><th class="num">Unrealized PnL</th><th>Status</th>
           </tr>
         </thead>
         <tbody>
@@ -284,9 +289,10 @@
             <td>{{ row.asset_class }}</td>
             <td class="num">{{ "%.4f"|format(row.quantity) }}</td>
             <td class="num">{% if row.avg_cost is not none %}{{ "%.2f"|format(row.avg_cost) }}{% else %}-{% endif %}</td>
+            <td>{{ row.value_source }}</td>
             <td class="num">{% if row.price is not none %}{{ "%.2f"|format(row.price) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
-            <td class="num">{% if row.unrealized_pnl is not none %}{{ "%.2f"|format(row.unrealized_pnl) }} {{ row.currency }}{% else %}-{% endif %}</td>
+            <td class="num{% if row.unrealized_pnl is not none and row.unrealized_pnl > 0 %} profit{% elif row.unrealized_pnl is not none and row.unrealized_pnl < 0 %} loss{% endif %}">{% if row.unrealized_pnl is not none %}{{ "%.2f"|format(row.unrealized_pnl) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
           </tr>
           {% endfor %}
@@ -314,7 +320,7 @@
             <td class="num">{{ "%.2f"|format(row.cost_per_unit) }}</td>
             <td class="num">{% if row.price is not none %}{{ "%.2f"|format(row.price) }}{% else %}-{% endif %}</td>
             <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
-            <td class="num">{% if row.unrealized_pnl_cad is not none %}${{ "%.2f"|format(row.unrealized_pnl_cad) }}{% else %}-{% endif %}</td>
+            <td class="num{% if row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad > 0 %} profit{% elif row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad < 0 %} loss{% endif %}">{% if row.unrealized_pnl_cad is not none %}${{ "%.2f"|format(row.unrealized_pnl_cad) }}{% else %}-{% endif %}</td>
             <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
           </tr>
           {% endfor %}

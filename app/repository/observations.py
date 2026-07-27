@@ -47,9 +47,23 @@ def latest_fx_rate(conn: sqlite3.Connection, pair: str = "USDCAD") -> Optional[f
 def instruments_for_price_refresh(conn: sqlite3.Connection):
     return conn.execute(
         """
-        SELECT id, conid, currency
-        FROM instruments
-        WHERE asset_class != 'CASH' AND conid IS NOT NULL AND conid != ''
-        ORDER BY symbol
+        WITH latest_date AS (
+            SELECT account_id, instrument_id, MAX(snapshot_date) AS snapshot_date
+            FROM positions
+            GROUP BY account_id, instrument_id
+        )
+        SELECT DISTINCT i.id, i.conid, i.currency
+        FROM positions pos
+        JOIN latest_date d
+          ON d.account_id = pos.account_id
+         AND d.instrument_id = pos.instrument_id
+         AND d.snapshot_date = pos.snapshot_date
+        JOIN accounts a ON a.id = pos.account_id
+        JOIN instruments i ON i.id = pos.instrument_id
+        WHERE a.broker != 'IBKR'
+          AND i.asset_class != 'CASH'
+          AND i.conid IS NOT NULL
+          AND i.conid != ''
+        ORDER BY i.symbol
         """
     ).fetchall()

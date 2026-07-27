@@ -26,6 +26,21 @@ class ParsedPosition:
 
 
 @dataclass(frozen=True)
+class ParsedPositionValue:
+    account_external_id: str
+    account_label: str
+    asset_class: str
+    symbol: str
+    name: str
+    currency: str
+    value_native: float
+    value_base: float
+    fx_rate_to_base: Optional[float]
+    quantity: float
+    conid: Optional[str]
+
+
+@dataclass(frozen=True)
 class ParsedCashReport:
     account_external_id: str
     account_label: str

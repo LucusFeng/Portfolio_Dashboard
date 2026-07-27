@@ -16,11 +16,13 @@ class HoldingRow:
     asset_class: str
     currency: str
     quantity: float
+    derived_quantity: Optional[float]
     avg_cost: Optional[float]
     price: Optional[float]
     market_value: Optional[float]
     market_value_cad: Optional[float]
     unrealized_pnl: Optional[float]
+    value_source: str
     stale_reason: Optional[str]
 
 
@@ -60,14 +62,27 @@ def to_cad(value: float, currency: str, usdcad: Optional[float]) -> Optional[flo
 
 
 def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
-    currency = row["price_currency"] or row["instrument_currency"]
+    flex_value_base = row["flex_value_base"]
+    flex_value_native = row["flex_value_native"]
+    has_flex_value = flex_value_base is not None and flex_value_native is not None
+    currency = row["flex_native_currency"] or row["price_currency"] or row["instrument_currency"]
     price = row["price"]
 
     market_value = None
     market_value_cad = None
     unrealized_pnl = None
     stale_reason = None
-    if price is None:
+
+    if has_flex_value:
+        market_value = float(flex_value_native)
+        market_value_cad = float(flex_value_base)
+        # Hybrid by design: IBKR supplies market value, while our transaction lots
+        # supply cost basis. A cost-basis mismatch becomes a PnL difference.
+        if row["avg_cost"] is not None:
+            unrealized_pnl = market_value - (float(row["quantity"]) * float(row["avg_cost"]))
+    elif row["account_broker"] == "IBKR":
+        stale_reason = "missing Flex value"
+    elif price is None:
         stale_reason = "missing price"
     else:
         market_value = float(row["quantity"]) * float(price)
@@ -75,7 +90,10 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
         if market_value_cad is None:
             stale_reason = "missing FX"
         if row["avg_cost"] is not None:
-            unrealized_pnl = (float(price) - float(row["avg_cost"])) * float(row["quantity"])
+            unrealized_pnl = market_value - (float(row["quantity"]) * float(row["avg_cost"]))
+
+    if market_value is not None and row["avg_cost"] is None:
+        stale_reason = "missing cost basis"
 
     return HoldingRow(
         account_label=row["account_label"],
@@ -84,11 +102,13 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
         asset_class=row["asset_class"],
         currency=currency,
         quantity=float(row["quantity"]),
+        derived_quantity=float(row["derived_quantity"]) if row["derived_quantity"] is not None else None,
         avg_cost=float(row["avg_cost"]) if row["avg_cost"] is not None else None,
         price=float(price) if price is not None else None,
         market_value=market_value,
         market_value_cad=market_value_cad,
         unrealized_pnl=unrealized_pnl,
+        value_source=row["value_source"],
         stale_reason=stale_reason,
     )
 
@@ -130,11 +150,13 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
                 asset_class=sample.asset_class,
                 currency=sample.currency,
                 quantity=float(bucket["quantity"]),
+                derived_quantity=None,
                 avg_cost=None,
                 price=sample.price,
                 market_value=None if missing else float(bucket["market_value"]),
                 market_value_cad=None if missing else float(bucket["market_value_cad"]),
                 unrealized_pnl=float(bucket["unrealized_pnl"]),
+                value_source="Mixed",
                 stale_reason="incomplete marks" if missing else None,
             )
         )

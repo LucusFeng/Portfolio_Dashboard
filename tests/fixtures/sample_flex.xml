@@ -17,9 +17,9 @@
         <CashTransaction accountId="U111111" acctAlias="" currency="USD" dateTime="20260616;090000" type="Broker Interest Paid" amount="-2.50" transactionID="C7" levelOfDetail="DETAIL" />
       </CashTransactions>
       <OpenPositions>
-        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="265598" symbol="AAPL" description="APPLE INC" assetCategory="STK" currency="USD" position="10" costBasisPrice="150.00" />
-        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="756733" symbol="XIC" description="ISHARES CORE S&amp;P TSX CAPPED COMP" assetCategory="ETF" currency="CAD" position="20" costBasisPrice="32.00" />
-        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="999999" symbol="OPT" description="IGNORED OPTION" assetCategory="OPT" currency="USD" position="1" costBasisPrice="1.00" />
+        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="265598" symbol="AAPL" description="APPLE INC" assetCategory="STK" currency="USD" position="10" costBasisPrice="150.00" positionValue="2000.00" positionValueInBase="2700.00" fxRateToBase="1.35" markPrice="" />
+        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="756733" symbol="XIC" description="ISHARES CORE S&amp;P TSX CAPPED COMP" assetCategory="ETF" currency="CAD" position="20" costBasisPrice="32.00" positionValue="640.00" positionValueInBase="640.00" fxRateToBase="1" markPrice="" />
+        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="999999" symbol="OPT" description="IGNORED OPTION" assetCategory="OPT" currency="USD" position="1" costBasisPrice="1.00" positionValue="1.00" positionValueInBase="1.35" fxRateToBase="1.35" />
       </OpenPositions>
       <CashReport>
         <CashReportCurrency accountId="U111111" acctAlias="" currency="BASE_SUMMARY" levelOfDetail="BaseCurrency" endingCash="10000.00" deposits="28500.00" withdrawals="0.00" dividends="17.00" fromDate="20260101" toDate="20260720" />

@@ -8,6 +8,7 @@ from app.ingestion.cibc_csv import parse_cibc_transactions
 from app.ingestion.ibkr_flex import (
     FlexClient,
     parse_flex_cash_reports,
+    parse_flex_position_values,
     parse_flex_positions,
     parse_flex_transactions,
     summarize_flex_xml,
@@ -17,6 +18,7 @@ from app.ingestion.ibkr_gateway import GatewayAuthError, GatewayClient, current_
 from app.ingestion.reference_data import YFinanceProvider
 from app.repository.cash import record_cash_reconciliation, upsert_cash_balances
 from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
+from app.repository.position_values import upsert_position_values
 from app.repository.positions import rebuild_derived_state, record_reconciliation
 from app.repository.runs import record_run
 from app.repository.transactions import append_transactions
@@ -69,8 +71,10 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
     reconciled = 0
     cash_reconciled = 0
     cash_balances = 0
+    position_values = 0
     parsed_transactions_count = 0
     parsed_positions_count = 0
+    parsed_position_values_count = 0
     parsed_cash_reports_count = 0
     section_counts = []
     lots = 0
@@ -93,11 +97,19 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
                 )
                 parsed_transactions = parse_flex_transactions(xml_text, source="ibkr_flex_%s" % login_name)
                 parsed_positions = parse_flex_positions(xml_text)
+                parsed_position_values = parse_flex_position_values(xml_text)
                 parsed_cash_reports = parse_flex_cash_reports(xml_text)
                 parsed_transactions_count += len(parsed_transactions)
                 parsed_positions_count += len(parsed_positions)
+                parsed_position_values_count += len(parsed_position_values)
                 parsed_cash_reports_count += len(parsed_cash_reports)
                 inserted += append_transactions(conn, parsed_transactions)
+                position_values += upsert_position_values(
+                    conn,
+                    parsed_position_values,
+                    snapshot_date,
+                    "IBKR Flex %s values" % login_name,
+                )
                 lots, positions = rebuild_derived_state(conn, snapshot_date)
                 reconciled += record_reconciliation(
                     conn,
@@ -127,16 +139,19 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
                 "transactions",
                 status,
                 (
-                    "Parsed %s transactions/%s broker positions/%s cash reports; inserted %s transactions; "
-                    "rebuilt %s lots/%s positions; stored %s cash balances; reconciled %s position rows/%s cash checks.%s %s"
+                    "Parsed %s transactions/%s broker positions/%s position values/%s cash reports; inserted %s transactions; "
+                    "rebuilt %s lots/%s positions; stored %s position values/%s cash balances; "
+                    "reconciled %s position rows/%s cash checks.%s %s"
                 )
                 % (
                     parsed_transactions_count,
                     parsed_positions_count,
+                    parsed_position_values_count,
                     parsed_cash_reports_count,
                     inserted,
                     lots,
                     positions,
+                    position_values,
                     cash_balances,
                     reconciled,
                     cash_reconciled,

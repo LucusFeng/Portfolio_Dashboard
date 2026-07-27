@@ -7,6 +7,7 @@ from app.ingestion.ibkr_flex import (
     _cash_type,
     _date,
     parse_flex_cash_reports,
+    parse_flex_position_values,
     parse_flex_positions,
     parse_flex_transactions,
 )
@@ -67,6 +68,19 @@ def test_parse_flex_positions_keeps_reconciliation_shape():
 
     assert positions[0].asset_class == "EQUITY"
     assert positions[1].asset_class == "ETF"
+
+
+def test_parse_flex_position_values_reads_reported_values_directly():
+    xml_text = Path("tests/fixtures/sample_flex.xml").read_text()
+
+    values = parse_flex_position_values(xml_text)
+
+    assert [value.symbol for value in values] == ["AAPL", "XIC"]
+    assert values[0].quantity == 10
+    assert values[0].value_native == 2000
+    assert values[0].value_base == 2700
+    assert values[0].fx_rate_to_base == 1.35
+    assert sum(value.value_base for value in values) == 3340
 
 
 def test_parse_flex_cash_reports_extracts_native_cash_report():

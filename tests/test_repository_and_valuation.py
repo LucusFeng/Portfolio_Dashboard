@@ -4,10 +4,11 @@ from pathlib import Path
 from app.db import init_db
 from app.ingestion.cibc_csv import parse_cibc_transactions
 from app.ingestion.ibkr_flex import parse_flex_transactions
-from app.models import ParsedCashReport, ParsedInstrument, ParsedTransaction
+from app.models import ParsedCashReport, ParsedInstrument, ParsedPositionValue, ParsedTransaction
 from app.repository.cash import record_cash_reconciliation, upsert_cash_balances
 from app.repository.instruments import upsert_instrument
-from app.repository.observations import append_fx_rate, append_price
+from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
+from app.repository.position_values import latest_position_values, upsert_position_values
 from app.repository.positions import rebuild_derived_state
 from app.repository.transactions import append_transactions
 from app.services.batch_pnl import get_batch_pnl
@@ -72,9 +73,27 @@ def test_transactions_dedup_lots_positions_and_dashboard_values():
     assert append_transactions(conn, transactions) == 3
     assert append_transactions(conn, transactions) == 0
     lots, positions = rebuild_derived_state(conn, "2026-06-15")
-    instrument_id = conn.execute("SELECT id FROM instruments WHERE symbol = 'AAPL'").fetchone()["id"]
-    append_price(conn, instrument_id, "2026-06-15", 200, "USD", "test")
     append_fx_rate(conn, "USDCAD", "2026-06-15", 1.35, "test")
+    upsert_position_values(
+        conn,
+        [
+            ParsedPositionValue(
+                "U111111",
+                "RRSP",
+                "EQUITY",
+                "AAPL",
+                "APPLE INC",
+                "USD",
+                value_native=1200,
+                value_base=1620,
+                fx_rate_to_base=1.35,
+                quantity=6,
+                conid="265598",
+            )
+        ],
+        "2026-06-15",
+        "test",
+    )
     upsert_cash_balances(conn, [ParsedCashReport("U111111", "RRSP", "USD", 1200)], "2026-06-15", "test")
     conn.commit()
 
@@ -87,15 +106,147 @@ def test_transactions_dedup_lots_positions_and_dashboard_values():
 
     aapl = next(row for row in data.holdings if row.symbol == "AAPL")
     assert aapl.quantity == 6
+    assert aapl.price == 200
     assert aapl.market_value == 1200
     assert aapl.market_value_cad == 1620
     assert aapl.unrealized_pnl == 300
+    assert aapl.value_source == "IBKR Flex"
     assert all(not row.symbol.startswith("CASH:") for row in data.holdings)
     assert data.cash.accounts[0].usd_cash == 1200
     assert data.cash.accounts[0].usd_cash_cad == 1620
     assert data.positions_total_cad == 1620
     assert data.total_cad == 3240
     assert data.growth_points[-1].cumulative_contributions_cad == 2700
+
+
+def test_flex_position_values_round_trip_and_latest_snapshot_wins():
+    conn = memory_db()
+
+    values = [
+        ParsedPositionValue("U111111", "RRSP", "EQUITY", "AAPL", "APPLE INC", "USD", 1000, 1350, 1.35, 5, "265598")
+    ]
+    assert upsert_position_values(conn, values, "2026-06-14", "test-old") == 1
+    newer = [
+        ParsedPositionValue("U111111", "RRSP", "EQUITY", "AAPL", "APPLE INC", "USD", 1200, 1620, 1.35, 6, "265598")
+    ]
+    assert upsert_position_values(conn, newer, "2026-06-15", "test-new") == 1
+    conn.commit()
+
+    rows = latest_position_values(conn)
+
+    assert len(rows) == 1
+    assert rows[0]["account_label"] == "RRSP"
+    assert rows[0]["symbol"] == "AAPL"
+    assert rows[0]["value_native"] == 1200
+    assert rows[0]["value_base"] == 1620
+    assert rows[0]["quantity"] == 6
+
+
+def test_ibkr_flex_value_displays_without_derived_position_and_does_not_double_fx():
+    conn = memory_db()
+    append_fx_rate(conn, "USDCAD", "2026-06-15", 1.35, "test")
+    upsert_position_values(
+        conn,
+        [ParsedPositionValue("U111111", "RRSP", "EQUITY", "AMZN", "AMAZON.COM INC", "USD", 1224.25, 1724.60, 1.4087, 5, "3691937")],
+        "2026-06-15",
+        "test",
+    )
+    conn.commit()
+
+    data = build_dashboard_data(conn)
+
+    amzn = data.holdings[0]
+    assert amzn.symbol == "AMZN"
+    assert amzn.quantity == 5
+    assert amzn.derived_quantity is None
+    assert amzn.price == 244.85
+    assert amzn.market_value == 1224.25
+    assert amzn.market_value_cad == 1724.60
+    assert amzn.unrealized_pnl is None
+    assert amzn.stale_reason == "missing cost basis"
+    assert data.positions_total_cad == 1724.60
+
+
+def test_cibc_valuation_still_uses_price_and_fx_path():
+    conn = memory_db()
+    append_transactions(
+        conn,
+        [
+            ParsedTransaction(
+                txn_date="2026-06-10",
+                broker="CIBC",
+                account_external_id="TFSA",
+                account_label="TFSA",
+                tax_type="TFSA",
+                txn_type="BUY",
+                quantity=10,
+                price=100,
+                amount=-1000,
+                currency="USD",
+                source="test",
+                external_id="CIBC1",
+                instrument=ParsedInstrument("EQUITY", "MSFT", "MICROSOFT CORP", "USD", "272093"),
+            )
+        ],
+    )
+    rebuild_derived_state(conn, "2026-06-15")
+    instrument_id = conn.execute("SELECT id FROM instruments WHERE symbol = 'MSFT'").fetchone()["id"]
+    append_price(conn, instrument_id, "2026-06-15", 120, "USD", "test")
+    append_fx_rate(conn, "USDCAD", "2026-06-15", 1.25, "test")
+    conn.commit()
+
+    data = build_dashboard_data(conn)
+
+    msft = data.holdings[0]
+    assert msft.value_source == "Price"
+    assert msft.market_value == 1200
+    assert msft.market_value_cad == 1500
+    assert msft.unrealized_pnl == 200
+
+
+def test_price_refresh_selects_only_non_ibkr_positions():
+    conn = memory_db()
+    append_transactions(
+        conn,
+        [
+            ParsedTransaction(
+                "2026-06-10",
+                "IBKR",
+                "U111111",
+                "RRSP",
+                "RRSP",
+                "BUY",
+                -100,
+                "USD",
+                "test",
+                "IBKR1",
+                ParsedInstrument("EQUITY", "AAPL", "APPLE INC", "USD", "265598"),
+                1,
+                100,
+            ),
+            ParsedTransaction(
+                "2026-06-10",
+                "CIBC",
+                "TFSA",
+                "TFSA",
+                "TFSA",
+                "BUY",
+                -100,
+                "USD",
+                "test",
+                "CIBC1",
+                ParsedInstrument("EQUITY", "MSFT", "MICROSOFT CORP", "USD", "272093"),
+                1,
+                100,
+            ),
+        ],
+    )
+    rebuild_derived_state(conn, "2026-06-15")
+    conn.commit()
+
+    rows = instruments_for_price_refresh(conn)
+
+    assert [row["conid"] for row in rows] == ["272093"]
 
 
 def test_batch_pnl_uses_open_lots_and_latest_marks():

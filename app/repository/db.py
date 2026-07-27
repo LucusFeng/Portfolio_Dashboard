@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 TABLES = [
     "cash_reconciliations",
@@ -13,6 +13,7 @@ TABLES = [
     "ingestion_runs",
     "fx_rates",
     "prices",
+    "position_values",
     "positions",
     "position_snapshots",
     "lots",
@@ -132,6 +133,24 @@ CREATE TABLE IF NOT EXISTS prices (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (instrument_id, as_of)
 );
+
+CREATE TABLE IF NOT EXISTS position_values (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_date TEXT NOT NULL,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    instrument_id INTEGER NOT NULL REFERENCES instruments(id),
+    value_native REAL NOT NULL,
+    value_base REAL NOT NULL,
+    native_currency TEXT NOT NULL,
+    fx_rate_to_base REAL,
+    quantity REAL NOT NULL,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (snapshot_date, account_id, instrument_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_position_values_latest
+ON position_values(account_id, instrument_id, snapshot_date, id);
 
 CREATE TABLE IF NOT EXISTS fx_rates (
     pair TEXT NOT NULL,

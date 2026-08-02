@@ -46,8 +46,12 @@ def test_parse_flex_transactions_normalizes_trades_and_cash_flows():
     assert transactions[0].instrument.symbol == "AAPL"
     assert transactions[0].quantity == 10
     assert transactions[0].amount == -1501
+    assert transactions[0].trade_cost == 1501
+    assert transactions[0].commission == -1
     assert transactions[1].txn_type == "SELL"
     assert transactions[1].amount == 700
+    assert all(txn.instrument is None or txn.instrument.asset_class != "CASH" for txn in transactions)
+    assert all(txn.external_id != "FX1" for txn in transactions)
     assert transactions[4].txn_date == "2026-05-01"
     signed_contributions = sum(
         txn.amount for txn in transactions if txn.txn_type in {"DEPOSIT", "WITHDRAWAL"} and txn.currency == "CAD"
@@ -68,6 +72,7 @@ def test_parse_flex_positions_keeps_reconciliation_shape():
 
     assert positions[0].asset_class == "EQUITY"
     assert positions[1].asset_class == "ETF"
+    assert all(position.asset_class != "CASH" for position in positions)
 
 
 def test_parse_flex_position_values_reads_reported_values_directly():
@@ -76,10 +81,14 @@ def test_parse_flex_position_values_reads_reported_values_directly():
     values = parse_flex_position_values(xml_text)
 
     assert [value.symbol for value in values] == ["AAPL", "XIC"]
+    assert all(value.asset_class != "CASH" for value in values)
     assert values[0].quantity == 10
     assert values[0].value_native == 2000
     assert values[0].value_base == 2700
     assert values[0].fx_rate_to_base == 1.35
+    assert values[0].mark_price == 200
+    assert values[0].cost_basis_price == 150
+    assert values[0].fifo_pnl_unrealized == 350
     assert sum(value.value_base for value in values) == 3340
 
 

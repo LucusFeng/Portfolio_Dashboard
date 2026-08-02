@@ -3,9 +3,10 @@
   <FlexStatements>
     <FlexStatement accountId="U111111">
       <Trades>
-        <Trade accountId="U111111" acctAlias="RRSP" conid="265598" symbol="AAPL" description="APPLE INC" assetCategory="STK" currency="USD" tradeDate="2026-06-10" buySell="BUY" quantity="10" tradePrice="150.00" proceeds="-1500.00" netCash="-1501.00" tradeID="T1" />
+        <Trade accountId="U111111" acctAlias="RRSP" conid="265598" symbol="AAPL" description="APPLE INC" assetCategory="STK" currency="USD" tradeDate="2026-06-10" buySell="BUY" quantity="10" tradePrice="150.00" proceeds="-1500.00" netCash="-1501.00" ibCommission="-1.00" cost="1501.00" tradeID="T1" />
         <Trade accountId="U111111" acctAlias="RRSP" conid="265598" symbol="AAPL" description="APPLE INC" assetCategory="STK" currency="USD" tradeDate="2026-06-11" buySell="SELL" quantity="4" tradePrice="175.00" proceeds="700.00" tradeID="T2" />
         <Trade accountId="U111111" acctAlias="RRSP" conid="756733" symbol="XIC" description="ISHARES CORE S&amp;P TSX CAPPED COMP" assetCategory="ETF" currency="CAD" tradeDate="2026-06-12" buySell="BUY" quantity="20" tradePrice="32.00" proceeds="-640.00" tradeID="T3" />
+        <Trade accountId="U111111" acctAlias="RRSP" conid="15016062" symbol="USD.CAD" description="USD.CAD" assetCategory="CASH" currency="CAD" tradeDate="2026-06-13" buySell="BUY" quantity="1000" tradePrice="1.35" proceeds="-1350.00" tradeID="FX1" />
       </Trades>
       <CashTransactions>
         <CashTransaction accountId="U111111" acctAlias="" currency="CAD" dateTime="20260323" type="Deposits/Withdrawals" amount="28500.00" transactionID="C1" levelOfDetail="DETAIL" />
@@ -17,8 +18,9 @@
         <CashTransaction accountId="U111111" acctAlias="" currency="USD" dateTime="20260616;090000" type="Broker Interest Paid" amount="-2.50" transactionID="C7" levelOfDetail="DETAIL" />
       </CashTransactions>
       <OpenPositions>
-        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="265598" symbol="AAPL" description="APPLE INC" assetCategory="STK" currency="USD" position="10" costBasisPrice="150.00" positionValue="2000.00" positionValueInBase="2700.00" fxRateToBase="1.35" markPrice="" />
-        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="756733" symbol="XIC" description="ISHARES CORE S&amp;P TSX CAPPED COMP" assetCategory="ETF" currency="CAD" position="20" costBasisPrice="32.00" positionValue="640.00" positionValueInBase="640.00" fxRateToBase="1" markPrice="" />
+        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="265598" symbol="AAPL" description="APPLE INC" assetCategory="STK" currency="USD" position="10" costBasisPrice="150.00" positionValue="2000.00" positionValueInBase="2700.00" fxRateToBase="1.35" markPrice="200.00" fifoPnlUnrealized="350.00" />
+        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="756733" symbol="XIC" description="ISHARES CORE S&amp;P TSX CAPPED COMP" assetCategory="ETF" currency="CAD" position="20" costBasisPrice="32.00" positionValue="640.00" positionValueInBase="640.00" fxRateToBase="1" markPrice="32.00" fifoPnlUnrealized="0.00" />
+        <OpenPosition accountId="U111111" acctAlias="RRSP" conid="15016062" symbol="USD.CAD" description="USD.CAD" assetCategory="CASH" currency="CAD" position="1000" costBasisPrice="1.35" positionValue="1350.00" positionValueInBase="1350.00" fxRateToBase="1" markPrice="1.35" fifoPnlUnrealized="0.00" />
         <OpenPosition accountId="U111111" acctAlias="RRSP" conid="999999" symbol="OPT" description="IGNORED OPTION" assetCategory="OPT" currency="USD" position="1" costBasisPrice="1.00" positionValue="1.00" positionValueInBase="1.35" fxRateToBase="1.35" />
       </OpenPositions>
       <CashReport>

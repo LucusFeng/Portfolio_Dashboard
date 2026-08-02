@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 TABLES = [
     "cash_reconciliations",
@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     txn_type TEXT NOT NULL,
     quantity REAL,
     price REAL,
+    trade_cost REAL,
+    commission REAL,
     amount REAL NOT NULL,
     currency TEXT NOT NULL,
     source TEXT NOT NULL,
@@ -99,6 +101,8 @@ CREATE TABLE IF NOT EXISTS lots (
     open_date TEXT NOT NULL,
     open_quantity REAL NOT NULL,
     remaining_qty REAL NOT NULL,
+    cost_basis REAL NOT NULL,
+    remaining_cost_basis REAL NOT NULL,
     cost_per_unit REAL NOT NULL,
     cost_currency TEXT NOT NULL,
     open_txn_id INTEGER REFERENCES transactions(id),
@@ -143,6 +147,11 @@ CREATE TABLE IF NOT EXISTS position_values (
     value_base REAL NOT NULL,
     native_currency TEXT NOT NULL,
     fx_rate_to_base REAL,
+    mark_price REAL,
+    cost_basis_price REAL,
+    fifo_pnl_unrealized REAL,
+    unrealized_capital_gains_pnl REAL,
+    unrealized_fx_pnl REAL,
     quantity REAL NOT NULL,
     source TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

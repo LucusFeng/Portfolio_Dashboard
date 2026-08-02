@@ -23,8 +23,8 @@ def append_transaction(conn: sqlite3.Connection, parsed: ParsedTransaction) -> b
             """
             INSERT INTO transactions
                 (txn_date, account_id, instrument_id, txn_type, quantity, price,
-                 amount, currency, source, external_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 trade_cost, commission, amount, currency, source, external_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 parsed.txn_date,
@@ -33,6 +33,8 @@ def append_transaction(conn: sqlite3.Connection, parsed: ParsedTransaction) -> b
                 parsed.txn_type,
                 parsed.quantity,
                 parsed.price,
+                parsed.trade_cost,
+                parsed.commission,
                 parsed.amount,
                 parsed.currency,
                 parsed.source,

@@ -64,6 +64,46 @@ on next app start.
 - The color styling is scoped to PnL cells only, so negative cash balances or other signed
   values do not automatically inherit profit/loss styling.
 
+## V3 Cost And PnL Refinement
+
+Valuation V3 corrected the cost-basis source. USD cost no longer comes from raw trade price
+or `costBasisPrice / fxRateToBase`. It now comes from Flex trade-level `cost`, which already
+includes commission and matches IBKR's lot cost basis.
+
+Key changes:
+
+- Added `trade_cost` and `commission` to stored transactions.
+- Added `cost_basis` and `remaining_cost_basis` to lots.
+- BUY lots use Flex `Trade.cost`; if unavailable, the app falls back to `quantity * price`.
+- Same-day buys still merge into one weighted-average batch.
+- Partial sells reduce remaining lot cost basis proportionally.
+- Added Flex OpenPosition fields to `position_values`: `mark_price`, `cost_basis_price`,
+  `fifo_pnl_unrealized`, and optional capital-gains/FX PnL fields.
+- Position market price prefers Flex `markPrice`, then falls back to `positionValue / quantity`.
+- Position USD PnL is now `positionValue - sum(remaining lot cost)`.
+- Position CAD PnL is now Flex `fifoPnlUnrealized`, matching the IBKR UI.
+- Batch PnL now shows native/USD batch value and native/USD PnL. Per-lot CAD PnL remains
+  deferred because Flex provides CAD PnL at the position level, not per lot.
+- SQLite schema version was bumped from `5` to `6`.
+
+## FX/Cash Instrument Exclusion
+
+Flex can emit currency exchange activity as `<Trade assetCategory="CASH">` and sometimes as
+cash-like open positions such as `USD.CAD`. These rows are not investable stock/ETF holdings
+and should not appear in Batch PnL, Consolidated Holdings, or Account Drilldown.
+
+The Flex instrument parser now treats only `EQUITY` and `ETF` as supported investable assets.
+This excludes CASH/FX rows from:
+
+- parsed broker positions used for reconciliation,
+- parsed position values used for holdings valuation,
+- parsed trade transactions used to rebuild lots and Batch PnL.
+
+Cash balances and cash activity still use the dedicated cash paths:
+
+- `CashReportCurrency` for displayed cash balances,
+- `CashTransaction` for contributions/dividends/fees.
+
 ## Verification
 
 ```bash
@@ -74,7 +114,7 @@ python3 -m compileall -q app tests
 Latest result:
 
 ```text
-22 passed
+23 passed
 compileall passed
 ```
 
@@ -98,5 +138,8 @@ Confirm:
 - IBKR rows show `IBKR Flex` as value source.
 - IBKR rows show a price derived from Flex `positionValue / quantity`.
 - CIBC rows show `Price` as value source.
+- Account Drilldown shows USD PnL and CAD PnL separately.
+- Batch PnL shows batch cost, batch value, and USD/native PnL.
 - PnL gains are green and PnL losses are red in Account Drilldown and Batch PnL.
+- FX/CASH trades such as `USD.CAD` do not appear in Batch PnL or holdings tables.
 - Gateway price refresh does not try to price IBKR holdings.

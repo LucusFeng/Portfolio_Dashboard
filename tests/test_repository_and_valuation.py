@@ -40,6 +40,7 @@ def test_transactions_dedup_lots_positions_and_dashboard_values():
             source="test",
             external_id="T1",
             instrument=ParsedInstrument("EQUITY", "AAPL", "APPLE INC", "USD", "265598"),
+            trade_cost=1501,
         ),
         ParsedTransaction(
             txn_date="2026-06-11",
@@ -89,6 +90,8 @@ def test_transactions_dedup_lots_positions_and_dashboard_values():
                 fx_rate_to_base=1.35,
                 quantity=6,
                 conid="265598",
+                mark_price=200,
+                fifo_pnl_unrealized=404.19,
             )
         ],
         "2026-06-15",
@@ -109,7 +112,10 @@ def test_transactions_dedup_lots_positions_and_dashboard_values():
     assert aapl.price == 200
     assert aapl.market_value == 1200
     assert aapl.market_value_cad == 1620
-    assert aapl.unrealized_pnl == 300
+    assert round(aapl.cost_basis, 2) == 900.60
+    assert round(aapl.avg_cost, 2) == 150.10
+    assert round(aapl.unrealized_pnl, 2) == 299.40
+    assert aapl.unrealized_pnl_cad == 404.19
     assert aapl.value_source == "IBKR Flex"
     assert all(not row.symbol.startswith("CASH:") for row in data.holdings)
     assert data.cash.accounts[0].usd_cash == 1200
@@ -202,6 +208,7 @@ def test_cibc_valuation_still_uses_price_and_fx_path():
     assert msft.market_value == 1200
     assert msft.market_value_cad == 1500
     assert msft.unrealized_pnl == 200
+    assert msft.unrealized_pnl_cad == 250
 
 
 def test_price_refresh_selects_only_non_ibkr_positions():
@@ -268,20 +275,124 @@ def test_batch_pnl_uses_open_lots_and_latest_marks():
                 source="test",
                 external_id="T1",
                 instrument=ParsedInstrument("EQUITY", "AAPL", "APPLE INC", "USD", "265598"),
+                trade_cost=1501,
             )
         ],
     )
     rebuild_derived_state(conn, "2026-06-15")
-    instrument_id = conn.execute("SELECT id FROM instruments WHERE symbol = 'AAPL'").fetchone()["id"]
-    append_price(conn, instrument_id, "2026-06-15", 200, "USD", "test")
-    append_fx_rate(conn, "USDCAD", "2026-06-15", 1.35, "test")
+    upsert_position_values(
+        conn,
+        [
+            ParsedPositionValue(
+                "U111111",
+                "RRSP",
+                "EQUITY",
+                "AAPL",
+                "APPLE INC",
+                "USD",
+                value_native=2000,
+                value_base=2700,
+                fx_rate_to_base=1.35,
+                quantity=10,
+                conid="265598",
+                mark_price=200,
+            )
+        ],
+        "2026-06-15",
+        "test",
+    )
     conn.commit()
 
     rows = get_batch_pnl(conn)
 
     assert len(rows) == 1
-    assert rows[0].market_value_cad == 2700
-    assert round(rows[0].unrealized_pnl_cad, 2) == 675
+    assert rows[0].cost_basis == 1501
+    assert rows[0].market_value == 2000
+    assert round(rows[0].unrealized_pnl, 2) == 499
+
+
+def test_v3_trade_cost_drives_total_and_batch_usd_pnl_with_flex_cad_pnl():
+    conn = memory_db()
+    append_transactions(
+        conn,
+        [
+            ParsedTransaction(
+                txn_date="2026-07-01",
+                broker="IBKR",
+                account_external_id="U111111",
+                account_label="Margin",
+                tax_type="UNKNOWN",
+                txn_type="BUY",
+                quantity=100,
+                price=15.9493,
+                amount=-1595.9303,
+                currency="USD",
+                source="test",
+                external_id="SOFI1",
+                instrument=ParsedInstrument("EQUITY", "SOFI", "SOFI TECHNOLOGIES INC", "USD", "481154823"),
+                trade_cost=1595.9303,
+                commission=-1.0,
+            ),
+            ParsedTransaction(
+                txn_date="2026-07-02",
+                broker="IBKR",
+                account_external_id="U111111",
+                account_label="Margin",
+                tax_type="UNKNOWN",
+                txn_type="BUY",
+                quantity=20,
+                price=16.035,
+                amount=-321.70006,
+                currency="USD",
+                source="test",
+                external_id="SOFI2",
+                instrument=ParsedInstrument("EQUITY", "SOFI", "SOFI TECHNOLOGIES INC", "USD", "481154823"),
+                trade_cost=321.70006,
+                commission=-1.00006,
+            ),
+        ],
+    )
+    rebuild_derived_state(conn, "2026-08-01")
+    upsert_position_values(
+        conn,
+        [
+            ParsedPositionValue(
+                "U111111",
+                "Margin",
+                "EQUITY",
+                "SOFI",
+                "SOFI TECHNOLOGIES INC",
+                "USD",
+                value_native=1957.20,
+                value_base=2743.41,
+                fx_rate_to_base=1.4017,
+                quantity=120,
+                conid="481154823",
+                mark_price=16.31,
+                cost_basis_price=22.1113,
+                fifo_pnl_unrealized=90.05,
+            )
+        ],
+        "2026-08-01",
+        "test",
+    )
+    conn.commit()
+
+    data = build_dashboard_data(conn)
+    sofi = data.holdings[0]
+    batches = get_batch_pnl(conn)
+
+    assert round(sofi.avg_cost, 2) == 15.98
+    assert round(sofi.cost_basis, 2) == 1917.63
+    assert sofi.price == 16.31
+    assert round(sofi.market_value, 2) == 1957.20
+    assert round(sofi.unrealized_pnl, 2) == 39.57
+    assert sofi.market_value_cad == 2743.41
+    assert sofi.unrealized_pnl_cad == 90.05
+    assert [round(row.cost_per_unit, 2) for row in batches] == [15.96, 16.09]
+    assert round(sum(row.cost_basis for row in batches), 2) == round(sofi.cost_basis, 2)
+    assert round(sum(row.market_value for row in batches), 2) == round(sofi.market_value, 2)
+    assert round(sum(row.unrealized_pnl for row in batches), 2) == round(sofi.unrealized_pnl, 2)
 
 
 def test_same_day_buys_merge_into_one_weighted_average_batch():

@@ -30,6 +30,15 @@ def latest_position_marks(conn: sqlite3.Connection):
              AND d.instrument_id = pv.instrument_id
              AND d.snapshot_date = pv.snapshot_date
         ),
+        lot_cost AS (
+            SELECT account_id, instrument_id,
+                   SUM(remaining_qty) AS lot_quantity,
+                   SUM(remaining_cost_basis) AS cost_basis,
+                   SUM(remaining_cost_basis) / NULLIF(SUM(remaining_qty), 0) AS avg_cost,
+                   cost_currency
+            FROM lots
+            GROUP BY account_id, instrument_id, cost_currency
+        ),
         latest_price AS (
             SELECT p.instrument_id, p.price, p.currency, p.as_of
             FROM prices p
@@ -51,15 +60,20 @@ def latest_position_marks(conn: sqlite3.Connection):
             i.currency AS instrument_currency,
             pv.quantity,
             pos.quantity AS derived_quantity,
-            pos.avg_cost,
-            pos.cost_currency,
-            CASE
-                WHEN ABS(pv.quantity) > 1e-9 THEN pv.value_native / pv.quantity
-                ELSE NULL
-            END AS price,
+            lc.avg_cost,
+            lc.cost_basis,
+            lc.cost_currency,
+            COALESCE(
+                pv.mark_price,
+                CASE
+                    WHEN ABS(pv.quantity) > 1e-9 THEN pv.value_native / pv.quantity
+                    ELSE NULL
+                END
+            ) AS price,
             pv.native_currency AS price_currency,
             pv.value_native AS flex_value_native,
             pv.value_base AS flex_value_base,
+            pv.fifo_pnl_unrealized AS flex_unrealized_pnl_cad,
             pv.native_currency AS flex_native_currency,
             'IBKR Flex' AS value_source
         FROM latest_value pv
@@ -68,6 +82,9 @@ def latest_position_marks(conn: sqlite3.Connection):
         LEFT JOIN latest_position pos
           ON pos.account_id = pv.account_id
          AND pos.instrument_id = pv.instrument_id
+        LEFT JOIN lot_cost lc
+          ON lc.account_id = pv.account_id
+         AND lc.instrument_id = pv.instrument_id
 
         UNION ALL
 
@@ -82,17 +99,22 @@ def latest_position_marks(conn: sqlite3.Connection):
             pos.quantity,
             pos.quantity AS derived_quantity,
             pos.avg_cost,
+            lc.cost_basis,
             pos.cost_currency,
             pr.price,
             pr.currency AS price_currency,
             NULL AS flex_value_native,
             NULL AS flex_value_base,
+            NULL AS flex_unrealized_pnl_cad,
             NULL AS flex_native_currency,
             'Price' AS value_source
         FROM latest_position pos
         JOIN accounts a ON a.id = pos.account_id
         JOIN instruments i ON i.id = pos.instrument_id
         LEFT JOIN latest_price pr ON pr.instrument_id = i.id
+        LEFT JOIN lot_cost lc
+          ON lc.account_id = pos.account_id
+         AND lc.instrument_id = pos.instrument_id
         WHERE a.broker != 'IBKR'
 
         UNION ALL
@@ -108,11 +130,13 @@ def latest_position_marks(conn: sqlite3.Connection):
             pos.quantity,
             pos.quantity AS derived_quantity,
             pos.avg_cost,
+            lc.cost_basis,
             pos.cost_currency,
             NULL AS price,
             NULL AS price_currency,
             NULL AS flex_value_native,
             NULL AS flex_value_base,
+            NULL AS flex_unrealized_pnl_cad,
             NULL AS flex_native_currency,
             'IBKR Flex' AS value_source
         FROM latest_position pos
@@ -121,6 +145,9 @@ def latest_position_marks(conn: sqlite3.Connection):
         LEFT JOIN latest_value pv
           ON pv.account_id = pos.account_id
          AND pv.instrument_id = pos.instrument_id
+        LEFT JOIN lot_cost lc
+          ON lc.account_id = pos.account_id
+         AND lc.instrument_id = pos.instrument_id
         WHERE a.broker = 'IBKR'
           AND pv.id IS NULL
 
@@ -164,13 +191,18 @@ def open_lot_marks(conn: sqlite3.Connection):
             l.open_date,
             l.open_quantity,
             l.remaining_qty,
+            l.cost_basis,
+            l.remaining_cost_basis,
             l.cost_per_unit,
             l.cost_currency,
-            CASE
-                WHEN pv.value_native IS NOT NULL AND ABS(pv.quantity) > 1e-9
-                THEN pv.value_native / pv.quantity
-                ELSE pr.price
-            END AS price,
+            COALESCE(
+                pv.mark_price,
+                CASE
+                    WHEN pv.value_native IS NOT NULL AND ABS(pv.quantity) > 1e-9
+                    THEN pv.value_native / pv.quantity
+                    ELSE pr.price
+                END
+            ) AS price,
             COALESCE(pv.native_currency, pr.currency) AS price_currency
         FROM lots l
         JOIN accounts a ON a.id = l.account_id

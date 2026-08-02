@@ -18,10 +18,12 @@ class HoldingRow:
     quantity: float
     derived_quantity: Optional[float]
     avg_cost: Optional[float]
+    cost_basis: Optional[float]
     price: Optional[float]
     market_value: Optional[float]
     market_value_cad: Optional[float]
     unrealized_pnl: Optional[float]
+    unrealized_pnl_cad: Optional[float]
     value_source: str
     stale_reason: Optional[str]
 
@@ -71,15 +73,18 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
     market_value = None
     market_value_cad = None
     unrealized_pnl = None
+    unrealized_pnl_cad = None
     stale_reason = None
+    cost_basis = float(row["cost_basis"]) if row["cost_basis"] is not None else None
 
     if has_flex_value:
         market_value = float(flex_value_native)
         market_value_cad = float(flex_value_base)
-        # Hybrid by design: IBKR supplies market value, while our transaction lots
-        # supply cost basis. A cost-basis mismatch becomes a PnL difference.
-        if row["avg_cost"] is not None:
-            unrealized_pnl = market_value - (float(row["quantity"]) * float(row["avg_cost"]))
+        unrealized_pnl_cad = (
+            float(row["flex_unrealized_pnl_cad"]) if row["flex_unrealized_pnl_cad"] is not None else None
+        )
+        if cost_basis is not None:
+            unrealized_pnl = market_value - cost_basis
     elif row["account_broker"] == "IBKR":
         stale_reason = "missing Flex value"
     elif price is None:
@@ -91,8 +96,9 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
             stale_reason = "missing FX"
         if row["avg_cost"] is not None:
             unrealized_pnl = market_value - (float(row["quantity"]) * float(row["avg_cost"]))
+            unrealized_pnl_cad = to_cad(unrealized_pnl, currency, usdcad)
 
-    if market_value is not None and row["avg_cost"] is None:
+    if market_value is not None and cost_basis is None:
         stale_reason = "missing cost basis"
 
     return HoldingRow(
@@ -104,10 +110,12 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
         quantity=float(row["quantity"]),
         derived_quantity=float(row["derived_quantity"]) if row["derived_quantity"] is not None else None,
         avg_cost=float(row["avg_cost"]) if row["avg_cost"] is not None else None,
+        cost_basis=cost_basis,
         price=float(price) if price is not None else None,
         market_value=market_value,
         market_value_cad=market_value_cad,
         unrealized_pnl=unrealized_pnl,
+        unrealized_pnl_cad=unrealized_pnl_cad,
         value_source=row["value_source"],
         stale_reason=stale_reason,
     )
@@ -125,6 +133,7 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
                 "market_value": 0.0,
                 "market_value_cad": 0.0,
                 "unrealized_pnl": 0.0,
+                "unrealized_pnl_cad": 0.0,
                 "missing": False,
             },
         )
@@ -136,6 +145,8 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
             bucket["market_value_cad"] = float(bucket["market_value_cad"]) + holding.market_value_cad
         if holding.unrealized_pnl is not None:
             bucket["unrealized_pnl"] = float(bucket["unrealized_pnl"]) + holding.unrealized_pnl
+        if holding.unrealized_pnl_cad is not None:
+            bucket["unrealized_pnl_cad"] = float(bucket["unrealized_pnl_cad"]) + holding.unrealized_pnl_cad
 
     rows = []
     for bucket in grouped.values():
@@ -152,10 +163,12 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
                 quantity=float(bucket["quantity"]),
                 derived_quantity=None,
                 avg_cost=None,
+                cost_basis=None,
                 price=sample.price,
                 market_value=None if missing else float(bucket["market_value"]),
                 market_value_cad=None if missing else float(bucket["market_value_cad"]),
                 unrealized_pnl=float(bucket["unrealized_pnl"]),
+                unrealized_pnl_cad=float(bucket["unrealized_pnl_cad"]),
                 value_source="Mixed",
                 stale_reason="incomplete marks" if missing else None,
             )

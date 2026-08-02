@@ -13,22 +13,37 @@ class OpenLot:
     open_date: str
     open_quantity: float
     remaining_qty: float
+    cost_basis: float
+    remaining_cost_basis: float
     cost_per_unit: float
     cost_currency: str
     open_txn_id: int
 
-    def add_buy(self, quantity: float, price: float) -> None:
-        total_cost = self.open_quantity * self.cost_per_unit + quantity * price
+    def add_buy(self, quantity: float, cost_basis: float) -> None:
+        total_cost = self.cost_basis + cost_basis
         self.open_quantity += quantity
         self.remaining_qty += quantity
-        self.cost_per_unit = total_cost / self.open_quantity
+        self.cost_basis = total_cost
+        self.remaining_cost_basis += cost_basis
+        self.cost_per_unit = self.remaining_cost_basis / self.remaining_qty
+
+    def consume(self, quantity: float) -> None:
+        if self.remaining_qty <= 0:
+            return
+        consumed = min(self.remaining_qty, quantity)
+        cost_reduction = self.remaining_cost_basis * (consumed / self.remaining_qty)
+        self.remaining_qty -= consumed
+        self.remaining_cost_basis -= cost_reduction
+        if self.remaining_qty > 1e-9:
+            self.cost_per_unit = self.remaining_cost_basis / self.remaining_qty
 
 
 def rebuild_lots(conn: sqlite3.Connection) -> int:
     conn.execute("DELETE FROM lots")
     rows = conn.execute(
         """
-        SELECT id, txn_date, account_id, instrument_id, txn_type, quantity, price, currency
+        SELECT id, txn_date, account_id, instrument_id, txn_type, quantity, price,
+               trade_cost, currency
         FROM transactions
         WHERE instrument_id IS NOT NULL AND txn_type IN ('BUY', 'SELL')
         ORDER BY account_id, instrument_id, txn_date, id
@@ -41,6 +56,7 @@ def rebuild_lots(conn: sqlite3.Connection) -> int:
         qty = abs(float(row["quantity"] or 0))
         if row["txn_type"] == "BUY":
             price = float(row["price"] or 0)
+            cost_basis = float(row["trade_cost"]) if row["trade_cost"] is not None else qty * price
             matching_lot = next(
                 (
                     lot
@@ -51,7 +67,7 @@ def rebuild_lots(conn: sqlite3.Connection) -> int:
                 None,
             )
             if matching_lot is not None:
-                matching_lot.add_buy(qty, price)
+                matching_lot.add_buy(qty, cost_basis)
             else:
                 lots.append(
                     OpenLot(
@@ -60,7 +76,9 @@ def rebuild_lots(conn: sqlite3.Connection) -> int:
                         open_date=row["txn_date"],
                         open_quantity=qty,
                         remaining_qty=qty,
-                        cost_per_unit=price,
+                        cost_basis=cost_basis,
+                        remaining_cost_basis=cost_basis,
+                        cost_per_unit=cost_basis / qty if qty else price,
                         cost_currency=row["currency"],
                         open_txn_id=int(row["id"]),
                     )
@@ -70,9 +88,9 @@ def rebuild_lots(conn: sqlite3.Connection) -> int:
         for lot in lots:
             if remaining_to_sell <= 0:
                 break
-            consumed = min(lot.remaining_qty, remaining_to_sell)
-            lot.remaining_qty -= consumed
-            remaining_to_sell -= consumed
+            before = lot.remaining_qty
+            lot.consume(remaining_to_sell)
+            remaining_to_sell -= before - lot.remaining_qty
 
     inserted = 0
     for lots in buckets.values():
@@ -83,8 +101,8 @@ def rebuild_lots(conn: sqlite3.Connection) -> int:
                 """
                 INSERT INTO lots
                     (account_id, instrument_id, open_date, open_quantity, remaining_qty,
-                     cost_per_unit, cost_currency, open_txn_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     cost_basis, remaining_cost_basis, cost_per_unit, cost_currency, open_txn_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lot.account_id,
@@ -92,6 +110,8 @@ def rebuild_lots(conn: sqlite3.Connection) -> int:
                     lot.open_date,
                     lot.open_quantity,
                     lot.remaining_qty,
+                    lot.cost_basis,
+                    lot.remaining_cost_basis,
                     lot.cost_per_unit,
                     lot.cost_currency,
                     lot.open_txn_id,
@@ -106,7 +126,7 @@ def rebuild_positions(conn: sqlite3.Connection, snapshot_date: str) -> int:
     rows = conn.execute(
         """
         SELECT account_id, instrument_id, SUM(remaining_qty) AS quantity,
-               SUM(remaining_qty * cost_per_unit) / NULLIF(SUM(remaining_qty), 0) AS avg_cost,
+               SUM(remaining_cost_basis) / NULLIF(SUM(remaining_qty), 0) AS avg_cost,
                cost_currency
         FROM lots
         GROUP BY account_id, instrument_id, cost_currency
@@ -195,4 +215,3 @@ def record_reconciliation(
         )
         inserted += 1
     return inserted
-

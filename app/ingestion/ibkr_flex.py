@@ -10,7 +10,7 @@ from app.models import ParsedCashReport, ParsedInstrument, ParsedPosition, Parse
 from app.repository.instruments import normalize_asset_class
 
 
-SUPPORTED_ASSET_CLASSES = {"EQUITY", "ETF", "CASH"}
+SUPPORTED_ASSET_CLASSES = {"EQUITY", "ETF"}
 
 
 def summarize_flex_xml(xml_text: str) -> Dict[str, int]:
@@ -141,6 +141,11 @@ def parse_flex_position_values(xml_text: str) -> List[ParsedPositionValue]:
                 fx_rate_to_base=_float(_attr(node, "fxRateToBase")),
                 quantity=quantity,
                 conid=instrument.conid,
+                mark_price=_float(_attr(node, "markPrice")),
+                cost_basis_price=_float(_attr(node, "costBasisPrice")),
+                fifo_pnl_unrealized=_float(_attr(node, "fifoPnlUnrealized")),
+                unrealized_capital_gains_pnl=_float(_attr(node, "unrealizedCapitalGainsPnl")),
+                unrealized_fx_pnl=_float(_attr(node, "unrealizedlFxPnl", "unrealizedFxPnl")),
             )
         )
 
@@ -203,6 +208,9 @@ def parse_flex_transactions(xml_text: str, source: str = "ibkr_flex") -> List[Pa
         proceeds = _float(_attr(node, "netCash", "proceeds", "amount"))
         if proceeds is None:
             proceeds = abs_qty * price * (1 if txn_type == "SELL" else -1)
+        trade_cost = _float(_attr(node, "cost"))
+        if trade_cost is None and txn_type == "BUY":
+            trade_cost = abs_qty * price
         transactions.append(
             ParsedTransaction(
                 txn_date=_date(_attr(node, "tradeDate", "dateTime", "reportDate")),
@@ -218,6 +226,8 @@ def parse_flex_transactions(xml_text: str, source: str = "ibkr_flex") -> List[Pa
                 source=source,
                 external_id=_attr(node, "tradeID", "tradeId", "executionId", "ibExecID"),
                 instrument=instrument,
+                trade_cost=abs(trade_cost) if trade_cost is not None else None,
+                commission=_float(_attr(node, "ibCommission", "commission")),
             )
         )
 

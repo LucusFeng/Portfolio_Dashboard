@@ -38,6 +38,11 @@ class ParsedPositionValue:
     fx_rate_to_base: Optional[float]
     quantity: float
     conid: Optional[str]
+    mark_price: Optional[float] = None
+    cost_basis_price: Optional[float] = None
+    fifo_pnl_unrealized: Optional[float] = None
+    unrealized_capital_gains_pnl: Optional[float] = None
+    unrealized_fx_pnl: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,8 @@ class ParsedTransaction:
     instrument: Optional[ParsedInstrument] = None
     quantity: Optional[float] = None
     price: Optional[float] = None
+    trade_cost: Optional[float] = None
+    commission: Optional[float] = None
 
 
 @dataclass(frozen=True)

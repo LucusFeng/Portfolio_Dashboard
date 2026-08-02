@@ -3,9 +3,7 @@ from typing import List, Optional
 
 import sqlite3
 
-from app.repository.observations import latest_fx_rate
 from app.repository.portfolio import open_lot_marks
-from app.services.portfolio import to_cad
 
 
 @dataclass(frozen=True)
@@ -16,34 +14,26 @@ class LotPnlRow:
     open_date: str
     remaining_qty: float
     cost_per_unit: float
+    cost_basis: float
     price: Optional[float]
-    market_value_cad: Optional[float]
-    unrealized_pnl_cad: Optional[float]
+    market_value: Optional[float]
+    unrealized_pnl: Optional[float]
+    currency: str
     stale_reason: Optional[str]
 
 
 def get_batch_pnl(conn: sqlite3.Connection) -> List[LotPnlRow]:
-    usdcad = latest_fx_rate(conn)
     rows: List[LotPnlRow] = []
     for row in open_lot_marks(conn):
         price = row["price"]
         stale_reason = None
-        market_value_cad = None
-        pnl_cad = None
+        market_value = None
+        pnl = None
         if price is None:
             stale_reason = "missing price"
         else:
             market_value = float(row["remaining_qty"]) * float(price)
-            market_value_cad = to_cad(market_value, row["price_currency"] or row["cost_currency"], usdcad)
-            cost_value_cad = to_cad(
-                float(row["remaining_qty"]) * float(row["cost_per_unit"]),
-                row["cost_currency"],
-                usdcad,
-            )
-            if market_value_cad is None or cost_value_cad is None:
-                stale_reason = "missing FX"
-            else:
-                pnl_cad = market_value_cad - cost_value_cad
+            pnl = market_value - float(row["remaining_cost_basis"])
         rows.append(
             LotPnlRow(
                 account_label=row["account_label"],
@@ -52,9 +42,11 @@ def get_batch_pnl(conn: sqlite3.Connection) -> List[LotPnlRow]:
                 open_date=row["open_date"],
                 remaining_qty=float(row["remaining_qty"]),
                 cost_per_unit=float(row["cost_per_unit"]),
+                cost_basis=float(row["remaining_cost_basis"]),
                 price=float(price) if price is not None else None,
-                market_value_cad=market_value_cad,
-                unrealized_pnl_cad=pnl_cad,
+                market_value=market_value,
+                unrealized_pnl=pnl,
+                currency=row["price_currency"] or row["cost_currency"],
                 stale_reason=stale_reason,
             )
         )

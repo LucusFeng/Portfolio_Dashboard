@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
 
 def connect(database_path: str) -> sqlite3.Connection:
     Path(database_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(database_path)
+    conn = sqlite3.connect(database_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -240,6 +240,13 @@ def init_db(conn: sqlite3.Connection) -> None:
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
     if version != SCHEMA_VERSION:
         _drop_app_tables(conn)
+    conn.executescript(SCHEMA)
+    conn.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
+    conn.commit()
+
+
+def reset_db(conn: sqlite3.Connection) -> None:
+    _drop_app_tables(conn)
     conn.executescript(SCHEMA)
     conn.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
     conn.commit()

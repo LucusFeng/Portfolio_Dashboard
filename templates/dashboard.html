@@ -47,6 +47,7 @@
       cursor: pointer;
     }
     button.secondary { background: white; color: var(--accent); }
+    button.danger { border-color: var(--bad); color: var(--bad); }
     input[type="file"] {
       max-width: 210px;
       color: var(--muted);
@@ -112,6 +113,12 @@
       <form method="post" action="/refresh/transactions"><button type="submit">Refresh transactions</button></form>
       <form method="post" action="/refresh/prices"><button class="secondary" type="submit">Refresh prices</button></form>
       <form method="post" action="/refresh/reference"><button class="secondary" type="submit">Enrich reference</button></form>
+      <form method="post" action="/dev/reset-db"><button class="secondary danger" type="submit">Reset DB</button></form>
+      <form class="upload" method="post" action="/upload/flex" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".xml">
+        <input type="text" name="source_label" value="login1" aria-label="Flex source label">
+        <button class="secondary" type="submit">Upload Flex XML</button>
+      </form>
       <form class="upload" method="post" action="/upload/cibc" enctype="multipart/form-data">
         <input type="file" name="file" accept=".csv">
         <button class="secondary" type="submit">Upload CIBC CSV</button>

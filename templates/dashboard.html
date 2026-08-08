@@ -110,7 +110,9 @@
       {% endif %}
     </div>
     <div class="actions">
-      <form method="post" action="/refresh/transactions"><button type="submit">Refresh transactions</button></form>
+      <form method="post" action="/refresh/transactions"><button type="submit">Refresh all</button></form>
+      <form method="post" action="/refresh/transactions/login1"><button class="secondary" type="submit">Refresh login1</button></form>
+      <form method="post" action="/refresh/transactions/login2"><button class="secondary" type="submit">Refresh login2</button></form>
       <form method="post" action="/refresh/prices"><button class="secondary" type="submit">Refresh prices</button></form>
       <form method="post" action="/refresh/reference"><button class="secondary" type="submit">Enrich reference</button></form>
       <form method="post" action="/dev/reset-db"><button class="secondary danger" type="submit">Reset DB</button></form>
@@ -177,7 +179,7 @@
         <thead>
           <tr>
             <th>Account</th><th class="num">CAD cash</th><th class="num">USD cash</th>
-            <th class="num">USD to CAD</th><th class="num">Account cash CAD</th><th>Status</th>
+            <th class="num">Net Cash CAD</th><th>Status</th>
           </tr>
         </thead>
         <tbody>
@@ -186,18 +188,16 @@
             <td>{{ row.account_label }}</td>
             <td class="num">${{ "%.2f"|format(row.cad_cash) }}</td>
             <td class="num">${{ "%.2f"|format(row.usd_cash) }} USD</td>
-            <td class="num">{% if row.usd_cash_cad is not none %}${{ "%.2f"|format(row.usd_cash_cad) }}{% else %}-{% endif %}</td>
-            <td class="num">{% if row.total_cad is not none %}${{ "%.2f"|format(row.total_cad) }}{% else %}-{% endif %}</td>
-            <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
+            <td class="num">{% if row.net_cash_cad is not none %}${{ "%.2f"|format(row.net_cash_cad) }}{% else %}- / needs FX{% endif %}</td>
+            <td>{% if row.status == "ok" %}ok{% else %}<span class="warn">{{ row.status }}</span>{% endif %}</td>
           </tr>
           {% endfor %}
           <tr>
             <td><strong>Total cash</strong></td>
             <td class="num"></td>
             <td class="num"></td>
-            <td class="num"></td>
             <td class="num"><strong>${{ "%.2f"|format(data.cash.cash_total_cad) }}</strong></td>
-            <td>{% if data.cash.has_missing_fx %}<span class="warn">missing FX</span>{% else %}ok{% endif %}</td>
+            <td>{% if data.cash.has_missing_fx %}<span class="warn">partial: needs FX</span>{% else %}ok{% endif %}</td>
           </tr>
         </tbody>
       </table>
@@ -205,30 +205,6 @@
         <div class="empty">No cash balances derived yet.</div>
       {% endif %}
     </section>
-
-    {% if data.cash.warnings %}
-    <section>
-      <h2>Cash Reconciliation</h2>
-      <p class="muted">Contribution mismatches usually mean the Flex query date range does not cover full account history.</p>
-      <table>
-        <thead>
-          <tr><th>Account</th><th>Currency</th><th>Check</th><th class="num">Broker value</th><th class="num">Derived value</th><th class="num">Difference</th></tr>
-        </thead>
-        <tbody>
-          {% for warning in data.cash.warnings %}
-          <tr>
-            <td>{{ warning.account_label }}</td>
-            <td>{{ warning.currency }}</td>
-            <td>{{ warning.check_type }}</td>
-            <td class="num">{{ "%.2f"|format(warning.broker_value) }}</td>
-            <td class="num">{{ "%.2f"|format(warning.derived_value) }}</td>
-            <td class="num warn">{{ "%.2f"|format(warning.difference) }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </section>
-    {% endif %}
 
     {% if data.reconciliation_warnings %}
     <section>

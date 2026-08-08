@@ -5,7 +5,7 @@ from app.db import init_db
 from app.ingestion.cibc_csv import parse_cibc_transactions
 from app.ingestion.ibkr_flex import parse_flex_transactions
 from app.models import ParsedCashReport, ParsedInstrument, ParsedPositionValue, ParsedTransaction
-from app.repository.cash import record_cash_reconciliation, upsert_cash_balances
+from app.repository.cash import upsert_cash_balances
 from app.repository.instruments import upsert_instrument
 from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
 from app.repository.position_values import latest_position_values, upsert_position_values
@@ -21,6 +21,30 @@ def memory_db():
     conn.row_factory = sqlite3.Row
     init_db(conn)
     return conn
+
+
+def store_statement_fx(conn, fx_rate: float, snapshot_date: str = "2026-06-15", value_base: float = 0.0):
+    upsert_position_values(
+        conn,
+        [
+            ParsedPositionValue(
+                "UFX",
+                "FX Seed",
+                "EQUITY",
+                "FXSEED",
+                "FX SEED",
+                "USD",
+                value_native=0,
+                value_base=value_base,
+                fx_rate_to_base=fx_rate,
+                quantity=0,
+                conid="FXSEED",
+                mark_price=0,
+            )
+        ],
+        snapshot_date,
+        "test-fx",
+    )
 
 
 def test_transactions_dedup_lots_positions_and_dashboard_values():
@@ -119,7 +143,8 @@ def test_transactions_dedup_lots_positions_and_dashboard_values():
     assert aapl.value_source == "IBKR Flex"
     assert all(not row.symbol.startswith("CASH:") for row in data.holdings)
     assert data.cash.accounts[0].usd_cash == 1200
-    assert data.cash.accounts[0].usd_cash_cad == 1620
+    assert data.cash.accounts[0].net_cash_cad == 1620
+    assert data.cash.accounts[0].status == "ok"
     assert data.positions_total_cad == 1620
     assert data.total_cad == 3240
     assert data.growth_points[-1].cumulative_contributions_cad == 2700
@@ -453,19 +478,17 @@ def test_cibc_csv_transactions_parse_into_canonical_model():
     assert transactions[1].instrument.symbol == "RY"
 
 
-def test_cash_balance_is_read_from_cash_report_and_converted_to_cad():
+def test_cash_balance_is_read_from_cash_report_and_net_cash_uses_statement_fx():
     conn = memory_db()
     upsert_cash_balances(conn, [ParsedCashReport("U111111", "RRSP", "USD", -100)], "2026-06-15", "test")
-    append_fx_rate(conn, "USDCAD", "2026-06-15", 1.25, "test")
+    store_statement_fx(conn, 1.25)
     conn.commit()
 
-    data = build_dashboard_data(conn)
+    cash = get_cash(conn).accounts[0]
 
-    cash = data.cash.accounts[0]
     assert cash.usd_cash == -100
-    assert cash.usd_cash_cad == -125
-    assert cash.total_cad == -125
-    assert data.holdings == []
+    assert cash.net_cash_cad == -125
+    assert cash.status == "ok"
 
 
 def test_cash_balance_upsert_reads_latest_per_account_currency_and_signed_total():
@@ -479,7 +502,7 @@ def test_cash_balance_upsert_reads_latest_per_account_currency_and_signed_total(
         "2026-06-15",
         "test",
     )
-    append_fx_rate(conn, "USDCAD", "2026-06-15", 1.25, "test")
+    store_statement_fx(conn, 1.25)
     conn.commit()
 
     cash = get_cash(conn)
@@ -487,51 +510,92 @@ def test_cash_balance_upsert_reads_latest_per_account_currency_and_signed_total(
     assert len(cash.accounts) == 1
     assert cash.accounts[0].usd_cash == -100
     assert cash.accounts[0].cad_cash == 50
-    assert cash.accounts[0].usd_cash_cad == -125
-    assert cash.accounts[0].total_cad == -75
+    assert cash.accounts[0].net_cash_cad == -75
+    assert cash.accounts[0].status == "ok"
     assert cash.cash_total_cad == -75
 
 
-def test_cash_reconciliation_warns_only_outside_native_tolerance():
+def test_cash_net_cash_cad_uses_latest_portfolio_wide_fx_rate():
     conn = memory_db()
-    append_transactions(
+    upsert_cash_balances(
         conn,
         [
-            ParsedTransaction(
-                txn_date="2026-06-01",
-                broker="IBKR",
-                account_external_id="U111111",
-                account_label="RRSP",
-                tax_type="RRSP",
-                txn_type="DEPOSIT",
-                amount=100,
-                currency="USD",
-                source="test",
-                external_id="C1",
-            )
+            ParsedCashReport("U24872141", "Margin", "CAD", 12122.97),
+            ParsedCashReport("U24872141", "Margin", "USD", -9657.98),
+            ParsedCashReport("U24081754", "RRSP", "CAD", 150.22),
+            ParsedCashReport("U24081754", "RRSP", "USD", 198.86),
         ],
+        "2026-08-01",
+        "test",
     )
-    record_cash_reconciliation(
+    store_statement_fx(conn, 1.25, "2026-07-31")
+    store_statement_fx(conn, 1.4017, "2026-08-01", value_base=67185.21)
+    conn.commit()
+
+    data = build_dashboard_data(conn)
+    cash_by_account = {row.account_label: row for row in data.cash.accounts}
+
+    assert round(cash_by_account["Margin"].net_cash_cad, 2) == -1414.62
+    assert round(cash_by_account["RRSP"].net_cash_cad, 2) == 428.96
+    assert round(data.cash.cash_total_cad, 2) == -985.66
+    assert round(data.total_cad, 2) == 66199.55
+
+
+def test_cash_fx_uses_latest_usd_position_value_not_cad_position_value():
+    conn = memory_db()
+    upsert_cash_balances(
         conn,
-        [ParsedCashReport("U111111", "RRSP", "USD", 100.75, deposits=100)],
+        [ParsedCashReport("U111111", "RRSP", "USD", -100)],
         "2026-06-15",
         "test",
     )
-    assert get_cash(conn).warnings == []
-
-    record_cash_reconciliation(
+    upsert_position_values(
         conn,
-        [ParsedCashReport("U111111", "RRSP", "USD", 102.01, deposits=100)],
+        [
+            ParsedPositionValue("U111111", "RRSP", "EQUITY", "AAPL", "APPLE INC", "USD", 100, 140, 1.4, 1, "265598"),
+            ParsedPositionValue("U111111", "RRSP", "ETF", "XIC", "ISHARES CORE S&P TSX CAPPED COMP", "CAD", 32, 32, 1, 1, "756733"),
+        ],
         "2026-06-15",
         "test",
     )
-    warnings = get_cash(conn).warnings
+    conn.commit()
 
-    assert len(warnings) == 1
-    assert warnings[0].check_type == "balance"
-    assert warnings[0].broker_value == 102.01
-    assert warnings[0].derived_value == 100
-    assert round(warnings[0].difference, 2) == 2.01
+    cash = get_cash(conn)
+
+    assert cash.accounts[0].net_cash_cad == -140
+
+
+def test_cash_with_usd_balance_needs_fx_when_no_position_values_exist():
+    conn = memory_db()
+    upsert_cash_balances(conn, [ParsedCashReport("U111111", "RRSP", "USD", 100)], "2026-06-15", "test")
+    conn.commit()
+
+    cash = get_cash(conn)
+
+    assert cash.accounts[0].net_cash_cad is None
+    assert cash.accounts[0].status == "needs FX"
+    assert cash.cash_total_cad == 0
+    assert cash.has_missing_fx is True
+
+
+def test_cash_with_zero_usd_does_not_need_fx():
+    conn = memory_db()
+    upsert_cash_balances(
+        conn,
+        [
+            ParsedCashReport("U111111", "RRSP", "CAD", 250),
+            ParsedCashReport("U111111", "RRSP", "USD", 0),
+        ],
+        "2026-06-15",
+        "test",
+    )
+    conn.commit()
+
+    cash = get_cash(conn)
+
+    assert cash.accounts[0].net_cash_cad == 250
+    assert cash.accounts[0].status == "ok"
+    assert cash.cash_total_cad == 250
 
 
 def test_contributions_series_nets_offsetting_pairs_and_total_is_signed():
@@ -552,26 +616,6 @@ def test_contributions_series_nets_offsetting_pairs_and_total_is_signed():
     assert data.growth_points[0].cumulative_contributions_cad == 0
     assert data.growth_points[-1].cumulative_contributions_cad == 28500
     assert data.contributions_total_cad == 28500
-
-
-def test_contributions_reconciliation_detects_short_date_window():
-    conn = memory_db()
-    append_transactions(
-        conn,
-        [ParsedTransaction("2026-05-01", "IBKR", "U111111", "RRSP", "RRSP", "DEPOSIT", 100, "CAD", "test", "C1")],
-    )
-    record_cash_reconciliation(
-        conn,
-        [ParsedCashReport("U111111", "RRSP", "CAD", 100, deposits=150)],
-        "2026-06-15",
-        "test",
-    )
-    warnings = get_cash(conn).warnings
-
-    assert len(warnings) == 1
-    assert warnings[0].check_type == "contributions"
-    assert warnings[0].broker_value == 150
-    assert warnings[0].derived_value == 100
 
 
 def test_reference_data_columns_can_be_updated():

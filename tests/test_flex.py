@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import app.ingestion.ibkr_flex as flex_module
 from app.ingestion.ibkr_flex import (
     FlexClient,
     _cash_type,
@@ -134,3 +135,115 @@ def test_reference_code_error_includes_ibkr_response_details():
     assert "Status=Fail" in str(exc.value)
     assert "ErrorCode=1012" in str(exc.value)
     assert "Invalid query ID" in str(exc.value)
+
+
+def test_flex_client_retries_transient_1001_send_request(monkeypatch):
+    responses = iter(
+        [
+            """
+            <FlexStatementResponse>
+              <Status>Fail</Status>
+              <ErrorCode>1001</ErrorCode>
+              <ErrorMessage>Statement could not be generated at this time.</ErrorMessage>
+            </FlexStatementResponse>
+            """,
+            """
+            <FlexStatementResponse>
+              <Status>Success</Status>
+              <ReferenceCode>ABC123</ReferenceCode>
+            </FlexStatementResponse>
+            """,
+            "<FlexQueryResponse><FlexStatements /></FlexQueryResponse>",
+        ]
+    )
+    sleeps = []
+
+    monkeypatch.setattr(flex_module, "_open_url", lambda url: next(responses))
+    monkeypatch.setattr(flex_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    client = FlexClient("https://example.test", send_retry_delays=(7,), poll_interval_seconds=0, poll_attempts=1)
+
+    xml_text = client.fetch_statement("token", "query")
+
+    assert "FlexQueryResponse" in xml_text
+    assert sleeps == [7]
+
+
+def test_flex_client_reports_send_request_attempt_count_after_1001_retries(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_open_url(url):
+        calls.append(url)
+        return """
+        <FlexStatementResponse>
+          <Status>Fail</Status>
+          <ErrorCode>1001</ErrorCode>
+          <ErrorMessage>Statement could not be generated at this time.</ErrorMessage>
+        </FlexStatementResponse>
+        """
+
+    monkeypatch.setattr(flex_module, "_open_url", fake_open_url)
+    monkeypatch.setattr(flex_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    client = FlexClient("https://example.test", send_retry_delays=(7, 11), poll_interval_seconds=0, poll_attempts=1)
+
+    with pytest.raises(RuntimeError) as exc:
+        client.fetch_statement("token", "query")
+
+    assert len(calls) == 3
+    assert sleeps == [7, 11]
+    assert "SendRequest failed after 3 attempts" in str(exc.value)
+    assert "ErrorCode=1001" in str(exc.value)
+
+
+def test_flex_client_does_not_retry_validation_errors(monkeypatch):
+    calls = []
+
+    def fake_open_url(url):
+        calls.append(url)
+        return """
+        <FlexStatementResponse>
+          <Status>Fail</Status>
+          <ErrorCode>1020</ErrorCode>
+          <ErrorMessage>Invalid request or unable to validate request.</ErrorMessage>
+        </FlexStatementResponse>
+        """
+
+    monkeypatch.setattr(flex_module, "_open_url", fake_open_url)
+    monkeypatch.setattr(flex_module.time, "sleep", lambda seconds: None)
+
+    client = FlexClient("https://example.test", send_retry_delays=(7, 11), poll_interval_seconds=0, poll_attempts=1)
+
+    with pytest.raises(RuntimeError) as exc:
+        client.fetch_statement("token", "query")
+
+    assert len(calls) == 1
+    assert "ErrorCode=1020" in str(exc.value)
+
+
+def test_flex_client_reports_poll_timeout_budget(monkeypatch):
+    responses = iter(
+        [
+            """
+            <FlexStatementResponse>
+              <Status>Success</Status>
+              <ReferenceCode>ABC123</ReferenceCode>
+            </FlexStatementResponse>
+            """,
+            "<FlexStatementResponse><Status>Success</Status><Message>Statement generation in progress</Message></FlexStatementResponse>",
+            "<FlexStatementResponse><Status>Success</Status><Message>Statement generation in progress</Message></FlexStatementResponse>",
+        ]
+    )
+    sleeps = []
+
+    monkeypatch.setattr(flex_module, "_open_url", lambda url: next(responses))
+    monkeypatch.setattr(flex_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    client = FlexClient("https://example.test", send_retry_delays=(), poll_interval_seconds=2, poll_attempts=2)
+
+    with pytest.raises(RuntimeError) as exc:
+        client.fetch_statement("token", "query")
+
+    assert sleeps == [2, 2]
+    assert "not ready after polling for 4 seconds" in str(exc.value)

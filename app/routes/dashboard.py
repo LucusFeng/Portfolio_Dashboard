@@ -1,3 +1,5 @@
+import time
+
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -16,7 +18,7 @@ from app.ingestion.ibkr_flex import (
 )
 from app.ingestion.ibkr_gateway import GatewayAuthError, GatewayClient, current_fx_mark
 from app.ingestion.reference_data import YFinanceProvider
-from app.repository.cash import record_cash_reconciliation, upsert_cash_balances
+from app.repository.cash import upsert_cash_balances
 from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
 from app.repository.position_values import upsert_position_values
 from app.repository.positions import rebuild_derived_state, record_reconciliation
@@ -63,12 +65,6 @@ def _ingest_flex_xml(conn, xml_text: str, source_key: str, snapshot_date: str):
         snapshot_date,
         "IBKR Flex %s positions" % source_key,
     )
-    cash_reconciled = record_cash_reconciliation(
-        conn,
-        parsed_cash_reports,
-        snapshot_date,
-        "IBKR Flex %s cash reports" % source_key,
-    )
     cash_balances = upsert_cash_balances(
         conn,
         parsed_cash_reports,
@@ -86,7 +82,6 @@ def _ingest_flex_xml(conn, xml_text: str, source_key: str, snapshot_date: str):
         "lots": lots,
         "derived_positions": positions,
         "reconciled": reconciled,
-        "cash_reconciled": cash_reconciled,
         "cash_balances": cash_balances,
     }
 
@@ -140,16 +135,51 @@ def reset_database(conn=Depends(db_conn)):
 
 @router.post("/refresh/transactions")
 def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depends(db_conn)):
+    return _refresh_transactions_for_logins(settings, conn, None)
+
+
+@router.post("/refresh/transactions/{login_name}")
+def refresh_transactions_for_login(
+    login_name: str,
+    settings: Settings = Depends(settings_dep),
+    conn=Depends(db_conn),
+):
+    return _refresh_transactions_for_logins(settings, conn, [login_name.lower()])
+
+
+def _refresh_transactions_for_logins(settings: Settings, conn, requested_logins):
     if not settings.flex_logins:
         with transaction(conn):
             record_run(conn, "transactions", "skipped", "No IBKR Flex credentials configured.")
         return RedirectResponse("/", status_code=303)
+    if requested_logins is None:
+        login_items = list(settings.flex_logins.items())
+        run_label = "all"
+    else:
+        login_items = [
+            (login_name, login)
+            for login_name, login in settings.flex_logins.items()
+            if login_name in requested_logins
+        ]
+        run_label = ",".join(requested_logins)
+    if not login_items:
+        with transaction(conn):
+            record_run(
+                conn,
+                "transactions",
+                "failed",
+                "No configured Flex login matched requested login(s): %s." % run_label,
+            )
+        return RedirectResponse("/", status_code=303)
 
-    client = FlexClient(settings.flex_base_url)
+    client = FlexClient(
+        settings.flex_base_url,
+        poll_interval_seconds=settings.flex_statement_poll_interval_seconds,
+        poll_attempts=settings.flex_statement_poll_attempts,
+    )
     snapshot_date = today_snapshot_date()
     inserted = 0
     reconciled = 0
-    cash_reconciled = 0
     cash_balances = 0
     position_values = 0
     parsed_transactions_count = 0
@@ -161,7 +191,7 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
     refreshed_logins = 0
     lots = 0
     positions = 0
-    for login_name, login in settings.flex_logins.items():
+    for index, (login_name, login) in enumerate(login_items):
         try:
             xml_text = client.fetch_statement(login.token, login.query_id)
             with transaction(conn):
@@ -172,7 +202,6 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
             lots = result["lots"]
             positions = result["derived_positions"]
             reconciled += result["reconciled"]
-            cash_reconciled += result["cash_reconciled"]
             cash_balances += result["cash_balances"]
             parsed_transactions_count += result["transactions"]
             parsed_positions_count += result["positions"]
@@ -181,6 +210,8 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
             refreshed_logins += 1
         except Exception as exc:
             failures.append(str(_login_error(login_name, login.query_id, exc)))
+        if index < len(login_items) - 1 and settings.flex_inter_login_delay_seconds > 0:
+            time.sleep(settings.flex_inter_login_delay_seconds)
 
     status = "success"
     hint = ""
@@ -202,11 +233,11 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
             (
                 "Refreshed %s/%s Flex logins. Parsed %s transactions/%s broker positions/%s position values/%s cash reports; "
                 "inserted %s transactions; rebuilt %s lots/%s positions; stored %s position values/%s cash balances; "
-                "reconciled %s position rows/%s cash checks.%s %s%s"
+                "reconciled %s position rows.%s %s%s"
             )
             % (
                 refreshed_logins,
-                len(settings.flex_logins),
+                len(login_items),
                 parsed_transactions_count,
                 parsed_positions_count,
                 parsed_position_values_count,
@@ -217,7 +248,6 @@ def refresh_transactions(settings: Settings = Depends(settings_dep), conn=Depend
                 position_values,
                 cash_balances,
                 reconciled,
-                cash_reconciled,
                 hint,
                 " | ".join(section_counts),
                 failure_text,
@@ -266,7 +296,7 @@ async def upload_flex(
                 (
                     "Uploaded %s. Parsed %s transactions/%s broker positions/%s position values/%s cash reports; "
                     "inserted %s transactions; rebuilt %s lots/%s positions; stored %s position values/%s cash balances; "
-                    "reconciled %s position rows/%s cash checks. %s"
+                    "reconciled %s position rows. %s"
                 )
                 % (
                     source_key,
@@ -280,7 +310,6 @@ async def upload_flex(
                     result["stored_position_values"],
                     result["cash_balances"],
                     result["reconciled"],
-                    result["cash_reconciled"],
                     _section_summary(source_key, result["summary"]),
                 ),
             )

@@ -32,12 +32,29 @@ class Settings:
     flex_base_url: str
     flex_logins: Dict[str, FlexLoginConfig]
     manual_usdcad_rate: Optional[float]
+    flex_inter_login_delay_seconds: float = 15.0
+    flex_statement_poll_attempts: int = 36
+    flex_statement_poll_interval_seconds: float = 5.0
 
 
 def _optional_float(value: Optional[str]) -> Optional[float]:
     if value is None or value == "":
         return None
     return float(value)
+
+
+def _float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value in (None, ""):
+        return default
+    return float(value)
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value in (None, ""):
+        return default
+    return int(value)
 
 
 def get_settings() -> Settings:
@@ -62,4 +79,7 @@ def get_settings() -> Settings:
         ),
         flex_logins=flex_logins,
         manual_usdcad_rate=_optional_float(os.getenv("MANUAL_USDCAD_RATE")),
+        flex_inter_login_delay_seconds=_float_env("IBKR_FLEX_INTER_LOGIN_DELAY_SECONDS", 15.0),
+        flex_statement_poll_attempts=_int_env("IBKR_FLEX_STATEMENT_POLL_ATTEMPTS", 36),
+        flex_statement_poll_interval_seconds=_float_env("IBKR_FLEX_STATEMENT_POLL_INTERVAL_SECONDS", 5.0),
     )

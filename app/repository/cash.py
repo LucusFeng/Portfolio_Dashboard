@@ -66,88 +66,17 @@ def latest_cash_balances(conn: sqlite3.Connection):
     ).fetchall()
 
 
-def derived_cash_balance(conn: sqlite3.Connection, account_id: int, currency: str) -> float:
+def latest_fx_rate_to_base(conn: sqlite3.Connection):
     row = conn.execute(
         """
-        SELECT COALESCE(SUM(amount), 0) AS balance
-        FROM transactions
-        WHERE account_id = ? AND currency = ?
-        """,
-        (account_id, currency),
+        SELECT fx_rate_to_base
+        FROM position_values
+        WHERE fx_rate_to_base IS NOT NULL
+          AND UPPER(native_currency) = 'USD'
+        ORDER BY snapshot_date DESC, created_at DESC, id DESC
+        LIMIT 1
+        """
     ).fetchone()
-    return float(row["balance"] or 0.0)
-
-
-def derived_contributions(conn: sqlite3.Connection, account_id: int, currency: str) -> float:
-    row = conn.execute(
-        """
-        SELECT COALESCE(SUM(amount), 0) AS contributions
-        FROM transactions
-        WHERE account_id = ?
-          AND currency = ?
-          AND txn_type IN ('DEPOSIT', 'WITHDRAWAL')
-        """,
-        (account_id, currency),
-    ).fetchone()
-    return float(row["contributions"] or 0.0)
-
-
-def record_cash_reconciliation(
-    conn: sqlite3.Connection,
-    cash_reports: Iterable[ParsedCashReport],
-    snapshot_date: str,
-    source: str,
-) -> int:
-    count = 0
-    for report in cash_reports:
-        account_id = upsert_account(conn, "IBKR", report.account_external_id, report.account_label)
-        checks = [
-            ("balance", report.ending_cash, derived_cash_balance(conn, account_id, report.currency)),
-            (
-                "contributions",
-                report.deposits + report.withdrawals,
-                derived_contributions(conn, account_id, report.currency),
-            ),
-        ]
-        for check_type, broker_value, derived_value in checks:
-            difference = float(broker_value) - float(derived_value)
-            conn.execute(
-                """
-                INSERT INTO cash_reconciliations
-                    (snapshot_date, account_id, currency, check_type, broker_value,
-                     derived_value, difference, status, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    snapshot_date,
-                    account_id,
-                    report.currency,
-                    check_type,
-                    broker_value,
-                    derived_value,
-                    difference,
-                    "ok" if abs(difference) <= 1.0 else "mismatch",
-                    source,
-                ),
-            )
-            count += 1
-    return count
-
-
-def latest_cash_reconciliation_warnings(conn: sqlite3.Connection):
-    return conn.execute(
-        """
-        SELECT
-            a.label AS account_label,
-            c.currency,
-            c.check_type,
-            c.broker_value,
-            c.derived_value,
-            c.difference
-        FROM cash_reconciliations c
-        JOIN accounts a ON a.id = c.account_id
-        WHERE c.status != 'ok'
-        ORDER BY c.created_at DESC, a.label, c.currency, c.check_type
-        LIMIT 20
-        """
-    ).fetchall()
+    if row is None:
+        return None
+    return float(row["fx_rate_to_base"])

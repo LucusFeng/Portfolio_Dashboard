@@ -172,11 +172,7 @@ def _refresh_transactions_for_logins(settings: Settings, conn, requested_logins)
             )
         return RedirectResponse("/", status_code=303)
 
-    client = FlexClient(
-        settings.flex_base_url,
-        poll_interval_seconds=settings.flex_statement_poll_interval_seconds,
-        poll_attempts=settings.flex_statement_poll_attempts,
-    )
+    client = FlexClient(settings.flex_base_url)
     snapshot_date = today_snapshot_date()
     inserted = 0
     reconciled = 0

@@ -137,67 +137,7 @@ def test_reference_code_error_includes_ibkr_response_details():
     assert "Invalid query ID" in str(exc.value)
 
 
-def test_flex_client_retries_transient_1001_send_request(monkeypatch):
-    responses = iter(
-        [
-            """
-            <FlexStatementResponse>
-              <Status>Fail</Status>
-              <ErrorCode>1001</ErrorCode>
-              <ErrorMessage>Statement could not be generated at this time.</ErrorMessage>
-            </FlexStatementResponse>
-            """,
-            """
-            <FlexStatementResponse>
-              <Status>Success</Status>
-              <ReferenceCode>ABC123</ReferenceCode>
-            </FlexStatementResponse>
-            """,
-            "<FlexQueryResponse><FlexStatements /></FlexQueryResponse>",
-        ]
-    )
-    sleeps = []
-
-    monkeypatch.setattr(flex_module, "_open_url", lambda url: next(responses))
-    monkeypatch.setattr(flex_module.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    client = FlexClient("https://example.test", send_retry_delays=(7,), poll_interval_seconds=0, poll_attempts=1)
-
-    xml_text = client.fetch_statement("token", "query")
-
-    assert "FlexQueryResponse" in xml_text
-    assert sleeps == [7]
-
-
-def test_flex_client_reports_send_request_attempt_count_after_1001_retries(monkeypatch):
-    calls = []
-    sleeps = []
-
-    def fake_open_url(url):
-        calls.append(url)
-        return """
-        <FlexStatementResponse>
-          <Status>Fail</Status>
-          <ErrorCode>1001</ErrorCode>
-          <ErrorMessage>Statement could not be generated at this time.</ErrorMessage>
-        </FlexStatementResponse>
-        """
-
-    monkeypatch.setattr(flex_module, "_open_url", fake_open_url)
-    monkeypatch.setattr(flex_module.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    client = FlexClient("https://example.test", send_retry_delays=(7, 11), poll_interval_seconds=0, poll_attempts=1)
-
-    with pytest.raises(RuntimeError) as exc:
-        client.fetch_statement("token", "query")
-
-    assert len(calls) == 3
-    assert sleeps == [7, 11]
-    assert "SendRequest failed after 3 attempts" in str(exc.value)
-    assert "ErrorCode=1001" in str(exc.value)
-
-
-def test_flex_client_does_not_retry_validation_errors(monkeypatch):
+def test_flex_client_does_not_retry_send_request_errors(monkeypatch):
     calls = []
 
     def fake_open_url(url):
@@ -213,7 +153,7 @@ def test_flex_client_does_not_retry_validation_errors(monkeypatch):
     monkeypatch.setattr(flex_module, "_open_url", fake_open_url)
     monkeypatch.setattr(flex_module.time, "sleep", lambda seconds: None)
 
-    client = FlexClient("https://example.test", send_retry_delays=(7, 11), poll_interval_seconds=0, poll_attempts=1)
+    client = FlexClient("https://example.test")
 
     with pytest.raises(RuntimeError) as exc:
         client.fetch_statement("token", "query")
@@ -222,7 +162,7 @@ def test_flex_client_does_not_retry_validation_errors(monkeypatch):
     assert "ErrorCode=1020" in str(exc.value)
 
 
-def test_flex_client_reports_poll_timeout_budget(monkeypatch):
+def test_flex_client_uses_prior_polling_window(monkeypatch):
     responses = iter(
         [
             """
@@ -240,10 +180,10 @@ def test_flex_client_reports_poll_timeout_budget(monkeypatch):
     monkeypatch.setattr(flex_module, "_open_url", lambda url: next(responses))
     monkeypatch.setattr(flex_module.time, "sleep", lambda seconds: sleeps.append(seconds))
 
-    client = FlexClient("https://example.test", send_retry_delays=(), poll_interval_seconds=2, poll_attempts=2)
+    client = FlexClient("https://example.test")
 
     with pytest.raises(RuntimeError) as exc:
-        client.fetch_statement("token", "query")
+        client.fetch_statement("token", "query", max_attempts=2)
 
-    assert sleeps == [2, 2]
-    assert "not ready after polling for 4 seconds" in str(exc.value)
+    assert sleeps == [3, 3]
+    assert "not ready after polling" in str(exc.value)

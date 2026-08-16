@@ -98,16 +98,11 @@ POST /refresh/transactions/{login_name}
 - Partial success behavior preserved: one failed login does not erase previously stored data for
   another login.
 - Added delay between login refreshes.
-- Added retries for transient `ErrorCode=1001` responses from `SendRequest`.
-- Added longer polling for `GetStatement`.
-- Added clearer timeout and retry-attempt messages.
 
-Config knobs:
+Active config knob:
 
 ```env
 IBKR_FLEX_INTER_LOGIN_DELAY_SECONDS=15
-IBKR_FLEX_STATEMENT_POLL_ATTEMPTS=36
-IBKR_FLEX_STATEMENT_POLL_INTERVAL_SECONDS=5
 ```
 
 Current status:
@@ -124,6 +119,33 @@ Statement could not be generated at this time. Please try again shortly.
 Latest single-login failure confirmed that the issue is not only caused by calling both logins
 together. The API problem is still outstanding.
 
+## Follow-Up: Targeted API Revert
+
+After later testing, the retry and long-polling API changes appeared to make the Flex Web Service
+behavior worse: neither login refreshed successfully. We therefore reverted the `FlexClient`
+API-call behavior back to the prior simpler implementation:
+
+- one `SendRequest`
+- no retry wrapper around `SendRequest`
+- poll `GetStatement` up to 10 times
+- 3-second sleep between polls
+
+Kept from the API debugging work:
+
+- `Refresh all`
+- `Refresh login1`
+- `Refresh login2`
+- per-login refresh route
+- partial success behavior
+- masked query ID diagnostics
+
+Removed from active runtime config:
+
+- `IBKR_FLEX_STATEMENT_POLL_ATTEMPTS`
+- `IBKR_FLEX_STATEMENT_POLL_INTERVAL_SECONDS`
+
+Single-login refresh calls are now back to the prior simple Flex API behavior.
+
 ## Open Issue
 
 The next debugging focus should be IBKR Flex Web Service behavior, not parser logic.
@@ -135,14 +157,14 @@ Possible next steps:
 - Compare whether manual XML and Web Service generation differ for the same query.
 - Avoid repeated rapid retries, because IBKR may escalate repeated failures into too-many-attempts
   lockout behavior.
-- Consider reverting or tuning the retry/polling changes if they make IBKR throttling worse.
+- Keep using single-login refresh while diagnosing the Flex Web Service issue.
 
 ## Verification
 
 Latest local test run after these changes:
 
 ```text
-36 passed
+34 passed
 ```
 
 Compile check also passed:

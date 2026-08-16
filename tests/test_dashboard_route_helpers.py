@@ -47,8 +47,6 @@ def test_refresh_transactions_continues_after_one_login_fails(monkeypatch):
         },
         manual_usdcad_rate=None,
         flex_inter_login_delay_seconds=0,
-        flex_statement_poll_attempts=1,
-        flex_statement_poll_interval_seconds=0,
     )
 
     dashboard_routes.refresh_transactions(settings=settings, conn=conn)
@@ -90,8 +88,6 @@ def test_refresh_single_login_only_calls_requested_login(monkeypatch):
         },
         manual_usdcad_rate=None,
         flex_inter_login_delay_seconds=0,
-        flex_statement_poll_attempts=1,
-        flex_statement_poll_interval_seconds=0,
     )
 
     dashboard_routes.refresh_transactions_for_login("login2", settings=settings, conn=conn)
@@ -118,8 +114,6 @@ def test_refresh_single_login_reports_unconfigured_login():
         },
         manual_usdcad_rate=None,
         flex_inter_login_delay_seconds=0,
-        flex_statement_poll_attempts=1,
-        flex_statement_poll_interval_seconds=0,
     )
 
     dashboard_routes.refresh_transactions_for_login("login2", settings=settings, conn=conn)

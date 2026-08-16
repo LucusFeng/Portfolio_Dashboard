@@ -4,7 +4,7 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.models import ParsedCashReport, ParsedInstrument, ParsedPosition, ParsedPositionValue, ParsedTransaction
 from app.repository.instruments import normalize_asset_class
@@ -296,23 +296,19 @@ def _query_url(base_url: str, endpoint: str, params: Dict[str, str]) -> str:
 
 
 class FlexClient:
-    def __init__(
-        self,
-        base_url: str,
-        send_retry_delays: Sequence[float] = (15.0, 30.0),
-        poll_interval_seconds: float = 5.0,
-        poll_attempts: int = 36,
-    ) -> None:
+    def __init__(self, base_url: str) -> None:
         self.base_url = base_url
-        self.send_retry_delays = tuple(send_retry_delays)
-        self.poll_interval_seconds = poll_interval_seconds
-        self.poll_attempts = poll_attempts
 
-    def fetch_statement(self, token: str, query_id: str, max_attempts: Optional[int] = None) -> str:
-        reference_code = self._send_request(token, query_id)
-        attempts = max_attempts if max_attempts is not None else self.poll_attempts
+    def fetch_statement(self, token: str, query_id: str, max_attempts: int = 10) -> str:
+        request_url = _query_url(
+            self.base_url,
+            "FlexStatementService.SendRequest",
+            {"t": token, "q": query_id, "v": "3"},
+        )
+        request_xml = _open_url(request_url)
+        reference_code = self._reference_code(request_xml)
 
-        for _ in range(attempts):
+        for _ in range(max_attempts):
             statement_url = _query_url(
                 self.base_url,
                 "FlexStatementService.GetStatement",
@@ -321,36 +317,8 @@ class FlexClient:
             statement_xml = _open_url(statement_url)
             if "Statement generation in progress" not in statement_xml:
                 return statement_xml
-            time.sleep(self.poll_interval_seconds)
-        waited_seconds = attempts * self.poll_interval_seconds
-        raise RuntimeError(
-            "IBKR Flex statement was not ready after polling for %.0f seconds. "
-            "Try increasing IBKR_FLEX_STATEMENT_POLL_ATTEMPTS or reducing the Flex query date range."
-            % waited_seconds
-        )
-
-    def _send_request(self, token: str, query_id: str) -> str:
-        request_url = _query_url(
-            self.base_url,
-            "FlexStatementService.SendRequest",
-            {"t": token, "q": query_id, "v": "3"},
-        )
-        attempts = len(self.send_retry_delays) + 1
-        last_error: Optional[FlexRequestError] = None
-        for attempt in range(attempts):
-            try:
-                request_xml = _open_url(request_url)
-                return self._reference_code(request_xml)
-            except FlexRequestError as exc:
-                last_error = exc
-                if exc.error_code != "1001":
-                    raise
-                if attempt >= len(self.send_retry_delays):
-                    raise RuntimeError(
-                        "IBKR Flex SendRequest failed after %s attempts. %s" % (attempts, exc)
-                    ) from exc
-                time.sleep(self.send_retry_delays[attempt])
-        raise RuntimeError("IBKR Flex SendRequest failed after %s attempts. %s" % (attempts, last_error))
+            time.sleep(3)
+        raise RuntimeError("IBKR Flex statement was not ready after polling.")
 
     @staticmethod
     def _reference_code(xml_text: str) -> str:
@@ -358,16 +326,10 @@ class FlexClient:
         for node in root.iter():
             if node.tag.split("}")[-1] == "ReferenceCode" and node.text:
                 return node.text.strip()
-        raise FlexRequestError(root)
-
-
-class FlexRequestError(RuntimeError):
-    def __init__(self, root: ET.Element) -> None:
-        self.status = _first_text(root, "Status")
-        self.error_code = _first_text(root, "ErrorCode")
-        self.error_message = _first_text(root, "ErrorMessage") or _first_text(root, "Message")
-        self.diagnostic = _response_diagnostic(root)
-        super().__init__("IBKR Flex SendRequest did not return a ReferenceCode. %s" % self.diagnostic)
+        raise RuntimeError(
+            "IBKR Flex SendRequest did not return a ReferenceCode. %s"
+            % _response_diagnostic(root)
+        )
 
 
 def _response_diagnostic(root: ET.Element) -> str:

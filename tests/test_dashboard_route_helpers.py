@@ -1,4 +1,5 @@
 import sqlite3
+import datetime as dt
 from pathlib import Path
 
 from app.config import FlexLoginConfig, Settings
@@ -123,6 +124,126 @@ def test_refresh_single_login_reports_unconfigured_login():
     assert run["status"] == "failed"
     assert "No configured Flex login matched" in run["message"]
     assert "login2" in run["message"]
+
+
+def test_refresh_all_sleeps_between_login_calls(monkeypatch):
+    events = []
+
+    class FakeFlexClient:
+        def __init__(self, base_url, **kwargs):
+            self.base_url = base_url
+
+        def fetch_statement(self, token, query_id):
+            events.append(("fetch", query_id))
+            return Path("tests/fixtures/sample_flex.xml").read_text()
+
+    monkeypatch.setattr(dashboard_routes, "FlexClient", FakeFlexClient)
+    monkeypatch.setattr(dashboard_routes.time, "sleep", lambda seconds: events.append(("sleep", seconds)))
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    settings = Settings(
+        database_path=":memory:",
+        gateway_base_url="https://localhost:5000/v1/api",
+        flex_base_url="https://example.test",
+        flex_logins={
+            "login1": FlexLoginConfig("login1", "token1", "query1-0072"),
+            "login2": FlexLoginConfig("login2", "token2", "query2-9557"),
+        },
+        manual_usdcad_rate=None,
+        flex_inter_login_delay_seconds=10,
+        flex_refresh_cooldown_seconds=0,
+    )
+
+    dashboard_routes.refresh_transactions(settings=settings, conn=conn)
+
+    assert events == [
+        ("fetch", "query1-0072"),
+        ("sleep", 10),
+        ("fetch", "query2-9557"),
+    ]
+
+
+def test_refresh_cooldown_skips_rapid_repeat(monkeypatch):
+    calls = []
+
+    class FakeFlexClient:
+        def __init__(self, base_url, **kwargs):
+            self.base_url = base_url
+
+        def fetch_statement(self, token, query_id):
+            calls.append(query_id)
+            return Path("tests/fixtures/sample_flex.xml").read_text()
+
+    monkeypatch.setattr(dashboard_routes, "FlexClient", FakeFlexClient)
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    settings = Settings(
+        database_path=":memory:",
+        gateway_base_url="https://localhost:5000/v1/api",
+        flex_base_url="https://example.test",
+        flex_logins={
+            "login1": FlexLoginConfig("login1", "token1", "query1-0072"),
+        },
+        manual_usdcad_rate=None,
+        flex_inter_login_delay_seconds=0,
+        flex_refresh_cooldown_seconds=60,
+    )
+
+    dashboard_routes.refresh_transactions_for_login("login1", settings=settings, conn=conn)
+    dashboard_routes.refresh_transactions_for_login("login1", settings=settings, conn=conn)
+
+    run = conn.execute("SELECT status, message FROM ingestion_runs ORDER BY id DESC LIMIT 1").fetchone()
+
+    assert calls == ["query1-0072"]
+    assert run["status"] == "skipped"
+    assert "cooldown active" in run["message"]
+
+
+def test_refresh_cooldown_allows_old_transaction_run(monkeypatch):
+    calls = []
+
+    class FakeFlexClient:
+        def __init__(self, base_url, **kwargs):
+            self.base_url = base_url
+
+        def fetch_statement(self, token, query_id):
+            calls.append(query_id)
+            return Path("tests/fixtures/sample_flex.xml").read_text()
+
+    monkeypatch.setattr(dashboard_routes, "FlexClient", FakeFlexClient)
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    old_time = (dt.datetime.utcnow() - dt.timedelta(seconds=120)).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        """
+        INSERT INTO ingestion_runs (kind, status, message, started_at, finished_at)
+        VALUES ('transactions', 'success', 'old run', ?, ?)
+        """,
+        (old_time, old_time),
+    )
+    conn.commit()
+    settings = Settings(
+        database_path=":memory:",
+        gateway_base_url="https://localhost:5000/v1/api",
+        flex_base_url="https://example.test",
+        flex_logins={
+            "login1": FlexLoginConfig("login1", "token1", "query1-0072"),
+        },
+        manual_usdcad_rate=None,
+        flex_inter_login_delay_seconds=0,
+        flex_refresh_cooldown_seconds=60,
+    )
+
+    dashboard_routes.refresh_transactions_for_login("login1", settings=settings, conn=conn)
+
+    run = conn.execute("SELECT status, message FROM ingestion_runs ORDER BY id DESC LIMIT 1").fetchone()
+
+    assert calls == ["query1-0072"]
+    assert run["status"] == "success"
+    assert "Refreshed 1/1 Flex logins" in run["message"]
 
 
 def test_manual_flex_xml_ingestion_helper_uses_same_pipeline():

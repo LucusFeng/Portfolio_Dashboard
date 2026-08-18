@@ -11,6 +11,7 @@ from app.repository.instruments import normalize_asset_class
 
 
 SUPPORTED_ASSET_CLASSES = {"EQUITY", "ETF"}
+THROTTLE_CODES = {"1025", "10010"}
 
 
 def summarize_flex_xml(xml_text: str) -> Dict[str, int]:
@@ -326,9 +327,16 @@ class FlexClient:
         for node in root.iter():
             if node.tag.split("}")[-1] == "ReferenceCode" and node.text:
                 return node.text.strip()
+        diagnostic = _response_diagnostic(root)
+        error_code = _first_text(root, "ErrorCode")
+        if error_code in THROTTLE_CODES:
+            raise RuntimeError(
+                "IBKR Flex rate-limited (ErrorCode=%s). Wait several minutes before retrying; "
+                "avoid repeated refreshes. %s" % (error_code, diagnostic)
+            )
         raise RuntimeError(
             "IBKR Flex SendRequest did not return a ReferenceCode. %s"
-            % _response_diagnostic(root)
+            % diagnostic
         )
 
 

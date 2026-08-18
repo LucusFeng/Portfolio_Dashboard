@@ -1,4 +1,5 @@
 import time
+import datetime as dt
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -22,7 +23,7 @@ from app.repository.cash import upsert_cash_balances
 from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
 from app.repository.position_values import upsert_position_values
 from app.repository.positions import rebuild_derived_state, record_reconciliation
-from app.repository.runs import record_run
+from app.repository.runs import latest_run_time, record_run
 from app.repository.transactions import append_transactions
 from app.services.instruments import enrich_missing_instruments
 from app.services.valuation import build_dashboard_data
@@ -171,6 +172,17 @@ def _refresh_transactions_for_logins(settings: Settings, conn, requested_logins)
                 "No configured Flex login matched requested login(s): %s." % run_label,
             )
         return RedirectResponse("/", status_code=303)
+    cooldown_remaining = _refresh_cooldown_remaining(conn, settings.flex_refresh_cooldown_seconds)
+    if cooldown_remaining > 0:
+        with transaction(conn):
+            record_run(
+                conn,
+                "transactions",
+                "skipped",
+                "Refresh skipped: cooldown active (%.0fs remaining). Avoid rapid repeat refreshes."
+                % cooldown_remaining,
+            )
+        return RedirectResponse("/", status_code=303)
 
     client = FlexClient(settings.flex_base_url)
     snapshot_date = today_snapshot_date()
@@ -250,6 +262,16 @@ def _refresh_transactions_for_logins(settings: Settings, conn, requested_logins)
             ),
         )
     return RedirectResponse("/", status_code=303)
+
+
+def _refresh_cooldown_remaining(conn, cooldown_seconds: float) -> float:
+    if cooldown_seconds <= 0:
+        return 0.0
+    last_run = latest_run_time(conn, "transactions")
+    if last_run is None:
+        return 0.0
+    elapsed = (dt.datetime.utcnow() - last_run).total_seconds()
+    return max(0.0, cooldown_seconds - elapsed)
 
 
 @router.post("/upload/cibc")

@@ -137,6 +137,24 @@ def test_reference_code_error_includes_ibkr_response_details():
     assert "Invalid query ID" in str(exc.value)
 
 
+@pytest.mark.parametrize("error_code", ["1025", "10010"])
+def test_reference_code_throttle_errors_are_actionable(error_code):
+    xml_text = """
+    <FlexStatementResponse>
+      <Status>Fail</Status>
+      <ErrorCode>%s</ErrorCode>
+      <ErrorMessage>Too many requests</ErrorMessage>
+    </FlexStatementResponse>
+    """ % error_code
+
+    with pytest.raises(RuntimeError) as exc:
+        FlexClient._reference_code(xml_text)
+
+    assert "rate-limited" in str(exc.value)
+    assert "ErrorCode=%s" % error_code in str(exc.value)
+    assert "Wait several minutes" in str(exc.value)
+
+
 def test_flex_client_does_not_retry_send_request_errors(monkeypatch):
     calls = []
 

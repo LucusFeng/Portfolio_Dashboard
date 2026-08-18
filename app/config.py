@@ -33,6 +33,7 @@ class Settings:
     flex_logins: Dict[str, FlexLoginConfig]
     manual_usdcad_rate: Optional[float]
     flex_inter_login_delay_seconds: float = 15.0
+    flex_refresh_cooldown_seconds: float = 60.0
 
 
 def _optional_float(value: Optional[str]) -> Optional[float]:
@@ -70,5 +71,12 @@ def get_settings() -> Settings:
         ),
         flex_logins=flex_logins,
         manual_usdcad_rate=_optional_float(os.getenv("MANUAL_USDCAD_RATE")),
-        flex_inter_login_delay_seconds=_float_env("IBKR_FLEX_INTER_LOGIN_DELAY_SECONDS", 15.0),
+        flex_inter_login_delay_seconds=_float_env(
+            "IBKR_FLEX_INTER_LOGIN_DELAY_SECONDS",
+            _float_env("IBKR_FLEX_INTER_LOGIN_DELAY_SEC", 15.0),
+        ),
+        flex_refresh_cooldown_seconds=_float_env(
+            "IBKR_FLEX_REFRESH_COOLDOWN_SECONDS",
+            _float_env("IBKR_FLEX_REFRESH_COOLDOWN_SEC", 60.0),
+        ),
     )

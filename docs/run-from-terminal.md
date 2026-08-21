@@ -6,7 +6,7 @@ Mac. It also handles the common Anaconda issue where `(base)` steals the `python
 ## 1. Open Terminal And Go To The Project
 
 ```bash
-cd /Users/lukefeng/Desktop/TRADING/Portfolio_Dashboard
+cd /Users/lukefeng/Code/Portfolio_Dashboard
 ```
 
 Confirm you are in the right folder:
@@ -75,7 +75,7 @@ python --version
 You want something like:
 
 ```text
-/Users/lukefeng/Desktop/TRADING/Portfolio_Dashboard/.venv/bin/python
+/Users/lukefeng/Code/Portfolio_Dashboard/.venv/bin/python
 Python 3.14.x
 ```
 
@@ -105,10 +105,11 @@ same Python environment that will run the app.
 python -m pytest -q
 ```
 
-Expected result:
+Expected result is a passing test suite. The exact count will change as the app grows; the
+important part is that pytest finishes without failures.
 
 ```text
-8 passed
+passed
 ```
 
 If you see `ModuleNotFoundError: No module named 'app'`, confirm this file exists:
@@ -126,7 +127,7 @@ pwd
 It should be:
 
 ```text
-/Users/lukefeng/Desktop/TRADING/Portfolio_Dashboard
+/Users/lukefeng/Code/Portfolio_Dashboard
 ```
 
 ## 7. Create A Minimal `.env`
@@ -147,6 +148,15 @@ IBKR_GATEWAY_BASE_URL=https://localhost:5000/v1/api
 
 You can add IBKR Flex credentials later. For a quick local test, the sample CIBC CSV is
 enough.
+
+Important: this repo now lives outside Desktop/iCloud. Keep using:
+
+```text
+/Users/lukefeng/Code/Portfolio_Dashboard
+```
+
+The old Desktop copy had iCloud/File Provider read timeouts in `.git/objects`, so do not use
+that folder for Git work.
 
 ## 8. Start The App
 
@@ -202,7 +212,7 @@ CTRL+C
 Next time, you do not need to recreate `.venv` unless something breaks. Use:
 
 ```bash
-cd /Users/lukefeng/Desktop/TRADING/Portfolio_Dashboard
+cd /Users/lukefeng/Code/Portfolio_Dashboard
 conda deactivate
 source .venv/bin/activate
 which python
@@ -252,7 +262,10 @@ http://127.0.0.1:8001
 
 ### Reset The Local Dev Database
 
-This deletes local app data and lets SQLite rebuild cleanly:
+The dashboard has a **Reset DB** button for development. Prefer that button when the app is
+running, because it resets tables and records a visible `dev_reset` run.
+
+If you need to reset from Terminal, this deletes local app data and lets SQLite rebuild cleanly:
 
 ```bash
 rm -f data/portfolio.sqlite3
@@ -262,6 +275,47 @@ python -m uvicorn app.main:app --reload
 The current schema keeps cash out of synthetic `CASH:*` positions. Cash appears in its own
 dashboard section from IBKR `CashReportCurrency endingCash`, while dated
 `CashTransactions` drive the contributions series.
+
+Cash display is broker-balance-first: `CashReportCurrency endingCash` is the source of truth,
+and Net Cash CAD is calculated from CAD cash plus signed USD cash using the latest Flex
+`fxRateToBase` from USD position values.
+
+### IBKR Flex API Timing
+
+The IBKR Flex Web Service should be treated as an end-of-day batch source, not a real-time
+intraday API. Manual XML upload is still the most reliable development path when IBKR returns
+temporary statement-generation errors.
+
+Dashboard refresh controls:
+
+- **Refresh all**
+- **Refresh login1**
+- **Refresh login2**
+- **Upload Flex XML**
+
+Useful `.env` knobs:
+
+```bash
+IBKR_FLEX_INTER_LOGIN_DELAY_SECONDS=15
+IBKR_FLEX_REFRESH_COOLDOWN_SECONDS=60
+```
+
+The shorter aliases also work:
+
+```bash
+IBKR_FLEX_INTER_LOGIN_DELAY_SEC=15
+IBKR_FLEX_REFRESH_COOLDOWN_SEC=60
+```
+
+If you see:
+
+```text
+ErrorCode=1001
+Statement could not be generated at this time. Please try again shortly.
+```
+
+wait and try again later, or manually download the Flex XML from IBKR and use **Upload Flex
+XML**. Resetting the local DB does not reset IBKR's server-side statement-generation timing.
 
 ### IBKR Flex Certificate Error
 

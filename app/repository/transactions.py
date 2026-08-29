@@ -5,7 +5,7 @@ from app.models import ParsedTransaction
 from app.repository.instruments import upsert_account, upsert_alias, upsert_instrument
 
 
-def append_transaction(conn: sqlite3.Connection, parsed: ParsedTransaction) -> bool:
+def append_transaction(conn: sqlite3.Connection, parsed: ParsedTransaction, content_hash: Optional[str] = None) -> bool:
     account_id = upsert_account(
         conn,
         parsed.broker,
@@ -23,8 +23,8 @@ def append_transaction(conn: sqlite3.Connection, parsed: ParsedTransaction) -> b
             """
             INSERT INTO transactions
                 (txn_date, account_id, instrument_id, txn_type, quantity, price,
-                 trade_cost, commission, amount, currency, source, external_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 trade_cost, commission, amount, currency, source, external_id, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 parsed.txn_date,
@@ -39,6 +39,7 @@ def append_transaction(conn: sqlite3.Connection, parsed: ParsedTransaction) -> b
                 parsed.currency,
                 parsed.source,
                 parsed.external_id,
+                content_hash,
             ),
         )
         return True
@@ -48,10 +49,14 @@ def append_transaction(conn: sqlite3.Connection, parsed: ParsedTransaction) -> b
         raise
 
 
-def append_transactions(conn: sqlite3.Connection, transactions: Iterable[ParsedTransaction]) -> int:
+def append_transactions(
+    conn: sqlite3.Connection,
+    transactions: Iterable[ParsedTransaction],
+    content_hash: Optional[str] = None,
+) -> int:
     inserted = 0
     for parsed in transactions:
-        if append_transaction(conn, parsed):
+        if append_transaction(conn, parsed, content_hash):
             inserted += 1
     return inserted
 

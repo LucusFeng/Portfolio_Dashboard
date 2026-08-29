@@ -1,5 +1,5 @@
 import sqlite3
-from typing import Iterable
+from typing import Iterable, Optional
 
 from app.models import ParsedCashReport
 from app.repository.instruments import upsert_account
@@ -10,6 +10,9 @@ def upsert_cash_balances(
     cash_reports: Iterable[ParsedCashReport],
     snapshot_date: str,
     source: str,
+    statement_generated_at: Optional[str] = None,
+    ingested_at: Optional[str] = None,
+    content_hash: Optional[str] = None,
 ) -> int:
     count = 0
     for report in cash_reports:
@@ -17,13 +20,17 @@ def upsert_cash_balances(
         conn.execute(
             """
             INSERT INTO cash_balances
-                (snapshot_date, account_id, currency, ending_cash, deposits, withdrawals, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (snapshot_date, account_id, currency, ending_cash, deposits, withdrawals, source,
+                 statement_generated_at, ingested_at, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(snapshot_date, account_id, currency) DO UPDATE SET
                 ending_cash = excluded.ending_cash,
                 deposits = excluded.deposits,
                 withdrawals = excluded.withdrawals,
-                source = excluded.source
+                source = excluded.source,
+                statement_generated_at = excluded.statement_generated_at,
+                ingested_at = excluded.ingested_at,
+                content_hash = excluded.content_hash
             """,
             (
                 snapshot_date,
@@ -33,6 +40,9 @@ def upsert_cash_balances(
                 report.deposits,
                 report.withdrawals,
                 source,
+                statement_generated_at,
+                ingested_at,
+                content_hash,
             ),
         )
         count += 1

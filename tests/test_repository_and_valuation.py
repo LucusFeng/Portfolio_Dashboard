@@ -6,6 +6,7 @@ from app.ingestion.cibc_csv import parse_cibc_transactions
 from app.ingestion.ibkr_flex import parse_flex_transactions
 from app.models import ParsedCashReport, ParsedInstrument, ParsedPositionValue, ParsedTransaction
 from app.repository.cash import upsert_cash_balances
+from app.repository.evidence import get_evidence, list_evidence, store_evidence
 from app.repository.instruments import upsert_instrument
 from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
 from app.repository.position_values import latest_position_values, upsert_position_values
@@ -45,6 +46,39 @@ def store_statement_fx(conn, fx_rate: float, snapshot_date: str = "2026-06-15", 
         snapshot_date,
         "test-fx",
     )
+
+
+def test_evidence_store_compresses_round_trips_and_dedups_by_hash():
+    conn = memory_db()
+    xml_text = Path("tests/fixtures/sample_flex.xml").read_text()
+
+    first = store_evidence(
+        conn,
+        xml_text,
+        "manual_login1",
+        "manual",
+        "2026-07-20",
+        "2026-07-21T17:28:53",
+        "2026-07-21T18:00:00",
+    )
+    second = store_evidence(
+        conn,
+        xml_text,
+        "manual_login1",
+        "manual",
+        "2026-07-20",
+        "2026-07-21T17:28:53",
+        "2026-07-21T18:01:00",
+    )
+    rows = list_evidence(conn)
+
+    assert first.was_new is True
+    assert second.was_new is False
+    assert first.evidence_id == second.evidence_id
+    assert first.content_hash == second.content_hash
+    assert len(rows) == 1
+    assert rows[0]["byte_size"] < rows[0]["raw_size"]
+    assert get_evidence(conn, content_hash=first.content_hash) == xml_text
 
 
 def test_transactions_dedup_lots_positions_and_dashboard_values():

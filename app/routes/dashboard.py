@@ -10,6 +10,7 @@ from app.db import connect, init_db, reset_db, transaction
 from app.ingestion.cibc_csv import parse_cibc_transactions
 from app.ingestion.ibkr_flex import (
     FlexClient,
+    parse_flex_statement_metadata,
     parse_flex_cash_reports,
     parse_flex_position_values,
     parse_flex_positions,
@@ -20,6 +21,7 @@ from app.ingestion.ibkr_flex import (
 from app.ingestion.ibkr_gateway import GatewayAuthError, GatewayClient, current_fx_mark
 from app.ingestion.reference_data import YFinanceProvider
 from app.repository.cash import upsert_cash_balances
+from app.repository.evidence import store_evidence
 from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
 from app.repository.position_values import upsert_position_values
 from app.repository.positions import rebuild_derived_state, record_reconciliation
@@ -46,34 +48,66 @@ def _login_error(login_name: str, query_id: str, exc: Exception) -> RuntimeError
     )
 
 
-def _ingest_flex_xml(conn, xml_text: str, source_key: str, snapshot_date: str):
+def _ingest_flex_xml(conn, xml_text: str, source_key: str, ingest_kind: str = "api"):
     summary = summarize_flex_xml(xml_text)
+    metadata = parse_flex_statement_metadata(xml_text)
+    snapshot_date = metadata.to_date or today_snapshot_date()
+    ingested_at = dt.datetime.utcnow().replace(microsecond=0).isoformat()
+    evidence = store_evidence(
+        conn,
+        xml_text,
+        source_key,
+        ingest_kind,
+        metadata.to_date,
+        metadata.when_generated,
+        ingested_at,
+    )
     parsed_transactions = parse_flex_transactions(xml_text, source="ibkr_flex_%s" % source_key)
     parsed_positions = parse_flex_positions(xml_text)
     parsed_position_values = parse_flex_position_values(xml_text)
     parsed_cash_reports = parse_flex_cash_reports(xml_text)
-    inserted = append_transactions(conn, parsed_transactions)
+    inserted = append_transactions(conn, parsed_transactions, evidence.content_hash)
     position_values = upsert_position_values(
         conn,
         parsed_position_values,
         snapshot_date,
         "IBKR Flex %s values" % source_key,
+        metadata.when_generated,
+        ingested_at,
+        evidence.content_hash,
     )
-    lots, positions = rebuild_derived_state(conn, snapshot_date)
+    lots, positions = rebuild_derived_state(
+        conn,
+        snapshot_date,
+        metadata.when_generated,
+        ingested_at,
+        evidence.content_hash,
+    )
     reconciled = record_reconciliation(
         conn,
         parsed_positions,
         snapshot_date,
         "IBKR Flex %s positions" % source_key,
+        metadata.when_generated,
+        ingested_at,
+        evidence.content_hash,
     )
     cash_balances = upsert_cash_balances(
         conn,
         parsed_cash_reports,
         snapshot_date,
         "IBKR Flex %s cash reports" % source_key,
+        metadata.when_generated,
+        ingested_at,
+        evidence.content_hash,
     )
     return {
         "summary": summary,
+        "snapshot_date": snapshot_date,
+        "statement_generated_at": metadata.when_generated,
+        "content_hash": evidence.content_hash,
+        "evidence_id": evidence.evidence_id,
+        "evidence_was_new": evidence.was_new,
         "transactions": len(parsed_transactions),
         "positions": len(parsed_positions),
         "position_values": len(parsed_position_values),
@@ -185,7 +219,6 @@ def _refresh_transactions_for_logins(settings: Settings, conn, requested_logins)
         return RedirectResponse("/", status_code=303)
 
     client = FlexClient(settings.flex_base_url)
-    snapshot_date = today_snapshot_date()
     inserted = 0
     reconciled = 0
     cash_balances = 0
@@ -203,8 +236,17 @@ def _refresh_transactions_for_logins(settings: Settings, conn, requested_logins)
         try:
             xml_text = client.fetch_statement(login.token, login.query_id)
             with transaction(conn):
-                result = _ingest_flex_xml(conn, xml_text, login_name, snapshot_date)
+                result = _ingest_flex_xml(conn, xml_text, login_name, "api")
             section_counts.append(_section_summary(login_name, result["summary"]))
+            section_counts.append(
+                "%s statement_date=%s evidence=%s:%s"
+                % (
+                    login_name,
+                    result["snapshot_date"],
+                    "new" if result["evidence_was_new"] else "same",
+                    _short_id(result["content_hash"]),
+                )
+            )
             inserted += result["inserted"]
             position_values += result["stored_position_values"]
             lots = result["lots"]
@@ -304,9 +346,8 @@ async def upload_flex(
     source_key = "manual_%s" % safe_label
     try:
         xml_text = (await file.read()).decode("utf-8-sig")
-        snapshot_date = today_snapshot_date()
         with transaction(conn):
-            result = _ingest_flex_xml(conn, xml_text, source_key, snapshot_date)
+            result = _ingest_flex_xml(conn, xml_text, source_key, "manual")
             record_run(
                 conn,
                 "flex_xml_upload",
@@ -314,7 +355,7 @@ async def upload_flex(
                 (
                     "Uploaded %s. Parsed %s transactions/%s broker positions/%s position values/%s cash reports; "
                     "inserted %s transactions; rebuilt %s lots/%s positions; stored %s position values/%s cash balances; "
-                    "reconciled %s position rows. %s"
+                    "reconciled %s position rows. statement_date=%s evidence=%s:%s. %s"
                 )
                 % (
                     source_key,
@@ -328,6 +369,9 @@ async def upload_flex(
                     result["stored_position_values"],
                     result["cash_balances"],
                     result["reconciled"],
+                    result["snapshot_date"],
+                    "new" if result["evidence_was_new"] else "same",
+                    _short_id(result["content_hash"]),
                     _section_summary(source_key, result["summary"]),
                 ),
             )

@@ -1,5 +1,5 @@
 import sqlite3
-from typing import Iterable
+from typing import Iterable, Optional
 
 from app.models import ParsedInstrument, ParsedPositionValue
 from app.repository.instruments import upsert_account, upsert_alias, upsert_instrument
@@ -10,6 +10,9 @@ def upsert_position_values(
     parsed_values: Iterable[ParsedPositionValue],
     snapshot_date: str,
     source: str,
+    statement_generated_at: Optional[str] = None,
+    ingested_at: Optional[str] = None,
+    content_hash: Optional[str] = None,
 ) -> int:
     count = 0
     for value in parsed_values:
@@ -31,8 +34,8 @@ def upsert_position_values(
                 (snapshot_date, account_id, instrument_id, value_native, value_base,
                  native_currency, fx_rate_to_base, mark_price, cost_basis_price,
                  fifo_pnl_unrealized, unrealized_capital_gains_pnl, unrealized_fx_pnl,
-                 quantity, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 quantity, source, statement_generated_at, ingested_at, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(snapshot_date, account_id, instrument_id) DO UPDATE SET
                 value_native = excluded.value_native,
                 value_base = excluded.value_base,
@@ -44,7 +47,10 @@ def upsert_position_values(
                 unrealized_capital_gains_pnl = excluded.unrealized_capital_gains_pnl,
                 unrealized_fx_pnl = excluded.unrealized_fx_pnl,
                 quantity = excluded.quantity,
-                source = excluded.source
+                source = excluded.source,
+                statement_generated_at = excluded.statement_generated_at,
+                ingested_at = excluded.ingested_at,
+                content_hash = excluded.content_hash
             """,
             (
                 snapshot_date,
@@ -61,6 +67,9 @@ def upsert_position_values(
                 value.unrealized_fx_pnl,
                 value.quantity,
                 source,
+                statement_generated_at,
+                ingested_at,
+                content_hash,
             ),
         )
         count += 1

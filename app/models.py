@@ -3,6 +3,13 @@ from typing import Dict, Optional
 
 
 @dataclass(frozen=True)
+class FlexStatementMetadata:
+    to_date: Optional[str]
+    when_generated: Optional[str]
+    statement_count: int = 0
+
+
+@dataclass(frozen=True)
 class ParsedInstrument:
     asset_class: str
     symbol: str

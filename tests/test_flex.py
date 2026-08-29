@@ -7,9 +7,11 @@ from app.ingestion.ibkr_flex import (
     FlexClient,
     _cash_type,
     _date,
+    _datetime,
     parse_flex_cash_reports,
     parse_flex_position_values,
     parse_flex_positions,
+    parse_flex_statement_metadata,
     parse_flex_transactions,
 )
 from app.services.flex import parse_flex_xml
@@ -110,6 +112,36 @@ def test_flex_date_parses_timestamped_and_date_only_values():
     assert _date("20260611;202000") == "2026-06-11"
     assert _date("20260323") == "2026-03-23"
     assert _date("2026-06-11") == "2026-06-11"
+
+
+def test_flex_datetime_parses_ibkr_timestamp():
+    assert _datetime("20260802;172853") == "2026-08-02T17:28:53"
+
+
+def test_parse_flex_statement_metadata_reads_statement_partition_fields():
+    xml_text = Path("tests/fixtures/sample_flex.xml").read_text()
+
+    metadata = parse_flex_statement_metadata(xml_text)
+
+    assert metadata.to_date == "2026-07-20"
+    assert metadata.when_generated == "2026-07-21T17:28:53"
+    assert metadata.statement_count == 1
+
+
+def test_parse_flex_statement_metadata_rejects_mixed_statement_dates():
+    xml_text = """
+    <FlexQueryResponse>
+      <FlexStatements>
+        <FlexStatement accountId="U1" toDate="20260720" whenGenerated="20260721;172853" />
+        <FlexStatement accountId="U2" toDate="20260721" whenGenerated="20260722;172853" />
+      </FlexStatements>
+    </FlexQueryResponse>
+    """
+
+    with pytest.raises(RuntimeError) as exc:
+        parse_flex_statement_metadata(xml_text)
+
+    assert "multiple statement toDate values" in str(exc.value)
 
 
 def test_cash_type_maps_observed_ibkr_cash_vocabulary():

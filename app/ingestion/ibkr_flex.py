@@ -6,7 +6,14 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
-from app.models import ParsedCashReport, ParsedInstrument, ParsedPosition, ParsedPositionValue, ParsedTransaction
+from app.models import (
+    FlexStatementMetadata,
+    ParsedCashReport,
+    ParsedInstrument,
+    ParsedPosition,
+    ParsedPositionValue,
+    ParsedTransaction,
+)
 from app.repository.instruments import normalize_asset_class
 
 
@@ -57,6 +64,53 @@ def _date(value: Optional[str]) -> str:
     if len(raw) >= 8 and raw[:8].isdigit():
         return "%s-%s-%s" % (raw[:4], raw[4:6], raw[6:8])
     return raw[:10]
+
+
+def _datetime(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    raw = value.strip()
+    date_part, _, time_part = raw.partition(";")
+    parsed_date = _date(date_part)
+    if time_part and len(time_part) >= 6 and time_part[:6].isdigit():
+        return "%sT%s:%s:%s" % (parsed_date, time_part[:2], time_part[2:4], time_part[4:6])
+    if len(raw) >= 19 and raw[4] == "-" and raw[7] == "-":
+        return raw[:19].replace(" ", "T")
+    return parsed_date
+
+
+def parse_flex_statement_metadata(xml_text: str) -> FlexStatementMetadata:
+    root = ET.fromstring(xml_text)
+    to_dates = []
+    generated_values = []
+    statement_count = 0
+
+    for node in root.iter():
+        if node.tag.split("}")[-1] != "FlexStatement":
+            continue
+        statement_count += 1
+        to_date = _attr(node, "toDate")
+        when_generated = _attr(node, "whenGenerated")
+        if to_date:
+            to_dates.append(_date(to_date))
+        if when_generated:
+            generated = _datetime(when_generated)
+            if generated:
+                generated_values.append(generated)
+
+    unique_to_dates = sorted(set(to_dates))
+    if len(unique_to_dates) > 1:
+        raise RuntimeError(
+            "IBKR Flex XML contains multiple statement toDate values: %s. "
+            "Split the export or add row-level partitioning before ingesting."
+            % ", ".join(unique_to_dates)
+        )
+
+    return FlexStatementMetadata(
+        to_date=unique_to_dates[0] if unique_to_dates else None,
+        when_generated=max(generated_values) if generated_values else None,
+        statement_count=statement_count,
+    )
 
 
 def _account(node: ET.Element) -> Tuple[str, str]:

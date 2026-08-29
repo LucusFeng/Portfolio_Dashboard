@@ -4,9 +4,10 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 TABLES = [
+    "evidence_store",
     "cash_balances",
     "reconciliations",
     "ingestion_runs",
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     currency TEXT NOT NULL,
     source TEXT NOT NULL,
     external_id TEXT,
+    content_hash TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -120,6 +122,9 @@ CREATE TABLE IF NOT EXISTS positions (
     avg_cost REAL NOT NULL,
     cost_currency TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'derived_transactions',
+    statement_generated_at TEXT,
+    ingested_at TEXT,
+    content_hash TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (snapshot_date, account_id, instrument_id)
 );
@@ -153,6 +158,9 @@ CREATE TABLE IF NOT EXISTS position_values (
     unrealized_fx_pnl REAL,
     quantity REAL NOT NULL,
     source TEXT NOT NULL,
+    statement_generated_at TEXT,
+    ingested_at TEXT,
+    content_hash TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (snapshot_date, account_id, instrument_id)
 );
@@ -179,6 +187,9 @@ CREATE TABLE IF NOT EXISTS reconciliations (
     difference REAL NOT NULL,
     status TEXT NOT NULL,
     source TEXT NOT NULL,
+    statement_generated_at TEXT,
+    ingested_at TEXT,
+    content_hash TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -191,8 +202,25 @@ CREATE TABLE IF NOT EXISTS cash_balances (
     deposits REAL NOT NULL DEFAULT 0,
     withdrawals REAL NOT NULL DEFAULT 0,
     source TEXT NOT NULL,
+    statement_generated_at TEXT,
+    ingested_at TEXT,
+    content_hash TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (snapshot_date, account_id, currency)
+);
+
+CREATE TABLE IF NOT EXISTS evidence_store (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_hash TEXT NOT NULL UNIQUE,
+    source TEXT NOT NULL,
+    ingest_kind TEXT NOT NULL,
+    statement_to_date TEXT,
+    statement_generated_at TEXT,
+    ingested_at TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    raw_size INTEGER NOT NULL,
+    raw_xml_gzip BLOB NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS ingestion_runs (

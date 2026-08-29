@@ -1,6 +1,6 @@
 import sqlite3
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from app.models import ParsedInstrument, ParsedPosition
 from app.repository.instruments import upsert_account, upsert_alias, upsert_instrument
@@ -121,7 +121,13 @@ def rebuild_lots(conn: sqlite3.Connection) -> int:
     return inserted
 
 
-def rebuild_positions(conn: sqlite3.Connection, snapshot_date: str) -> int:
+def rebuild_positions(
+    conn: sqlite3.Connection,
+    snapshot_date: str,
+    statement_generated_at: Optional[str] = None,
+    ingested_at: Optional[str] = None,
+    content_hash: Optional[str] = None,
+) -> int:
     conn.execute("DELETE FROM positions WHERE snapshot_date = ?", (snapshot_date,))
     rows = conn.execute(
         """
@@ -138,13 +144,17 @@ def rebuild_positions(conn: sqlite3.Connection, snapshot_date: str) -> int:
         conn.execute(
             """
             INSERT INTO positions
-                (snapshot_date, account_id, instrument_id, quantity, avg_cost, cost_currency)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (snapshot_date, account_id, instrument_id, quantity, avg_cost, cost_currency,
+                 statement_generated_at, ingested_at, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(snapshot_date, account_id, instrument_id) DO UPDATE SET
                 quantity = excluded.quantity,
                 avg_cost = excluded.avg_cost,
                 cost_currency = excluded.cost_currency,
-                source = 'derived_transactions'
+                source = 'derived_transactions',
+                statement_generated_at = excluded.statement_generated_at,
+                ingested_at = excluded.ingested_at,
+                content_hash = excluded.content_hash
             """,
             (
                 snapshot_date,
@@ -153,6 +163,9 @@ def rebuild_positions(conn: sqlite3.Connection, snapshot_date: str) -> int:
                 row["quantity"],
                 row["avg_cost"],
                 row["cost_currency"],
+                statement_generated_at,
+                ingested_at,
+                content_hash,
             ),
         )
         inserted += 1
@@ -160,9 +173,15 @@ def rebuild_positions(conn: sqlite3.Connection, snapshot_date: str) -> int:
     return inserted
 
 
-def rebuild_derived_state(conn: sqlite3.Connection, snapshot_date: str) -> Tuple[int, int]:
+def rebuild_derived_state(
+    conn: sqlite3.Connection,
+    snapshot_date: str,
+    statement_generated_at: Optional[str] = None,
+    ingested_at: Optional[str] = None,
+    content_hash: Optional[str] = None,
+) -> Tuple[int, int]:
     lots = rebuild_lots(conn)
-    positions = rebuild_positions(conn, snapshot_date)
+    positions = rebuild_positions(conn, snapshot_date, statement_generated_at, ingested_at, content_hash)
     return lots, positions
 
 
@@ -171,7 +190,14 @@ def record_reconciliation(
     broker_positions: Iterable[ParsedPosition],
     snapshot_date: str,
     source: str,
+    statement_generated_at: Optional[str] = None,
+    ingested_at: Optional[str] = None,
+    content_hash: Optional[str] = None,
 ) -> int:
+    conn.execute(
+        "DELETE FROM reconciliations WHERE snapshot_date = ? AND source = ?",
+        (snapshot_date, source),
+    )
     inserted = 0
     for broker_position in broker_positions:
         account_id = upsert_account(conn, "IBKR", broker_position.account_external_id, broker_position.account_label)
@@ -199,8 +225,8 @@ def record_reconciliation(
             """
             INSERT INTO reconciliations
                 (snapshot_date, account_id, instrument_id, broker_quantity, derived_quantity,
-                 difference, status, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 difference, status, source, statement_generated_at, ingested_at, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot_date,
@@ -211,6 +237,9 @@ def record_reconciliation(
                 difference,
                 "ok" if abs(difference) < 1e-6 else "mismatch",
                 source,
+                statement_generated_at,
+                ingested_at,
+                content_hash,
             ),
         )
         inserted += 1

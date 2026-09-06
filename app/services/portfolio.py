@@ -26,6 +26,11 @@ class HoldingRow:
     unrealized_pnl_cad: Optional[float]
     value_source: str
     stale_reason: Optional[str]
+    snapshot_date: Optional[str] = None
+    statement_generated_at: Optional[str] = None
+    ingested_at: Optional[str] = None
+    cad_pnl_status: Optional[str] = None
+    pnl_message: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,10 @@ class AccountSummary:
     account_label: str
     market_value_cad: float
     missing_prices: int
+    snapshot_date: Optional[str] = None
+    statement_generated_at: Optional[str] = None
+    ingested_at: Optional[str] = None
+    cad_pnl_pending: int = 0
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,9 @@ class PortfolioData:
     latest_fx_rate: Optional[float]
     last_ingestion_message: Optional[str]
     reconciliation_warnings: List[ReconciliationWarning]
+    as_of_date: Optional[str]
+    has_mixed_snapshot_dates: bool
+    has_pending_cad_pnl: bool
 
 
 def to_cad(value: float, currency: str, usdcad: Optional[float]) -> Optional[float]:
@@ -76,6 +88,9 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
     unrealized_pnl_cad = None
     stale_reason = None
     cost_basis = float(row["cost_basis"]) if row["cost_basis"] is not None else None
+    pnl_ready = row["pnl_ready"]
+    cad_pnl_status = None
+    pnl_message = row["pnl_message"] or row["pnl_warning"]
 
     if has_flex_value:
         market_value = float(flex_value_native)
@@ -83,6 +98,10 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
         unrealized_pnl_cad = (
             float(row["flex_unrealized_pnl_cad"]) if row["flex_unrealized_pnl_cad"] is not None else None
         )
+        if unrealized_pnl_cad is None:
+            cad_pnl_status = "pending" if pnl_ready == 0 else "missing"
+        else:
+            cad_pnl_status = "ready"
         if cost_basis is not None:
             unrealized_pnl = market_value - cost_basis
     elif row["account_broker"] == "IBKR":
@@ -118,6 +137,11 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
         unrealized_pnl_cad=unrealized_pnl_cad,
         value_source=row["value_source"],
         stale_reason=stale_reason,
+        snapshot_date=row["snapshot_date"],
+        statement_generated_at=row["statement_generated_at"],
+        ingested_at=row["ingested_at"],
+        cad_pnl_status=cad_pnl_status,
+        pnl_message=pnl_message,
     )
 
 
@@ -135,9 +159,14 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
                 "unrealized_pnl": 0.0,
                 "unrealized_pnl_cad": 0.0,
                 "missing": False,
+                "dates": set(),
+                "cad_pnl_pending": False,
+                "cad_pnl_missing": False,
             },
         )
         bucket["quantity"] = float(bucket["quantity"]) + holding.quantity
+        if holding.snapshot_date:
+            bucket["dates"].add(holding.snapshot_date)
         if holding.market_value is None or holding.market_value_cad is None:
             bucket["missing"] = True
         else:
@@ -145,14 +174,22 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
             bucket["market_value_cad"] = float(bucket["market_value_cad"]) + holding.market_value_cad
         if holding.unrealized_pnl is not None:
             bucket["unrealized_pnl"] = float(bucket["unrealized_pnl"]) + holding.unrealized_pnl
-        if holding.unrealized_pnl_cad is not None:
+        if holding.cad_pnl_status == "pending":
+            bucket["cad_pnl_pending"] = True
+        elif holding.unrealized_pnl_cad is not None:
             bucket["unrealized_pnl_cad"] = float(bucket["unrealized_pnl_cad"]) + holding.unrealized_pnl_cad
+        elif holding.value_source == "IBKR Flex":
+            bucket["cad_pnl_missing"] = True
 
     rows = []
     for bucket in grouped.values():
         sample = bucket["sample"]
         assert isinstance(sample, HoldingRow)
         missing = bool(bucket["missing"])
+        cad_pnl_pending = bool(bucket["cad_pnl_pending"])
+        cad_pnl_missing = bool(bucket["cad_pnl_missing"])
+        cad_pnl_status = "pending" if cad_pnl_pending else "missing" if cad_pnl_missing else "ready"
+        snapshot_dates = sorted(bucket["dates"])
         rows.append(
             HoldingRow(
                 account_label="All accounts",
@@ -168,9 +205,11 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
                 market_value=None if missing else float(bucket["market_value"]),
                 market_value_cad=None if missing else float(bucket["market_value_cad"]),
                 unrealized_pnl=float(bucket["unrealized_pnl"]),
-                unrealized_pnl_cad=float(bucket["unrealized_pnl_cad"]),
+                unrealized_pnl_cad=None if cad_pnl_pending or cad_pnl_missing else float(bucket["unrealized_pnl_cad"]),
                 value_source="Mixed",
                 stale_reason="incomplete marks" if missing else None,
+                snapshot_date=", ".join(snapshot_dates) if snapshot_dates else None,
+                cad_pnl_status=cad_pnl_status,
             )
         )
     return sorted(rows, key=lambda item: item.symbol)
@@ -179,17 +218,44 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
 def get_portfolio(conn: sqlite3.Connection) -> PortfolioData:
     usdcad = latest_fx_rate(conn)
     holdings = [_holding(row, usdcad) for row in latest_position_marks(conn)]
-    accounts: Dict[str, Dict[str, float]] = {}
+    accounts: Dict[str, Dict[str, object]] = {}
     for holding in holdings:
-        bucket = accounts.setdefault(holding.account_label, {"market_value_cad": 0.0, "missing_prices": 0.0})
+        bucket = accounts.setdefault(
+            holding.account_label,
+            {
+                "market_value_cad": 0.0,
+                "missing_prices": 0.0,
+                "snapshot_dates": set(),
+                "statement_generated_values": [],
+                "ingested_values": [],
+                "cad_pnl_pending": 0,
+            },
+        )
         if holding.market_value_cad is None:
-            bucket["missing_prices"] += 1
+            bucket["missing_prices"] = float(bucket["missing_prices"]) + 1
         else:
-            bucket["market_value_cad"] += holding.market_value_cad
+            bucket["market_value_cad"] = float(bucket["market_value_cad"]) + holding.market_value_cad
+        if holding.snapshot_date:
+            bucket["snapshot_dates"].add(holding.snapshot_date)
+        if holding.statement_generated_at:
+            bucket["statement_generated_values"].append(holding.statement_generated_at)
+        if holding.ingested_at:
+            bucket["ingested_values"].append(holding.ingested_at)
+        if holding.cad_pnl_status == "pending":
+            bucket["cad_pnl_pending"] = int(bucket["cad_pnl_pending"]) + 1
     summaries = [
-        AccountSummary(label, float(values["market_value_cad"]), int(values["missing_prices"]))
+        AccountSummary(
+            label,
+            float(values["market_value_cad"]),
+            int(values["missing_prices"]),
+            max(values["snapshot_dates"]) if values["snapshot_dates"] else None,
+            max(values["statement_generated_values"]) if values["statement_generated_values"] else None,
+            max(values["ingested_values"]) if values["ingested_values"] else None,
+            int(values["cad_pnl_pending"]),
+        )
         for label, values in sorted(accounts.items())
     ]
+    snapshot_dates = sorted({summary.snapshot_date for summary in summaries if summary.snapshot_date})
     warnings = [
         ReconciliationWarning(
             row["account_label"],
@@ -208,4 +274,7 @@ def get_portfolio(conn: sqlite3.Connection) -> PortfolioData:
         latest_fx_rate=usdcad,
         last_ingestion_message=latest_run_message(conn),
         reconciliation_warnings=warnings,
+        as_of_date=snapshot_dates[-1] if snapshot_dates else None,
+        has_mixed_snapshot_dates=len(snapshot_dates) > 1,
+        has_pending_cad_pnl=any(summary.cad_pnl_pending > 0 for summary in summaries),
     )

@@ -19,6 +19,7 @@ from app.repository.instruments import normalize_asset_class
 
 SUPPORTED_ASSET_CLASSES = {"EQUITY", "ETF"}
 THROTTLE_CODES = {"1025", "10010"}
+PNL_NOT_READY_TEXT = "realized p/l is not ready"
 
 
 def summarize_flex_xml(xml_text: str) -> Dict[str, int]:
@@ -84,6 +85,7 @@ def parse_flex_statement_metadata(xml_text: str) -> FlexStatementMetadata:
     to_dates = []
     generated_values = []
     statement_count = 0
+    messages = []
 
     for node in root.iter():
         if node.tag.split("}")[-1] != "FlexStatement":
@@ -98,6 +100,10 @@ def parse_flex_statement_metadata(xml_text: str) -> FlexStatementMetadata:
             if generated:
                 generated_values.append(generated)
 
+    for node in root.iter():
+        if node.tag.split("}")[-1] == "Message" and node.text:
+            messages.append(node.text.strip())
+
     unique_to_dates = sorted(set(to_dates))
     if len(unique_to_dates) > 1:
         raise RuntimeError(
@@ -106,11 +112,37 @@ def parse_flex_statement_metadata(xml_text: str) -> FlexStatementMetadata:
             % ", ".join(unique_to_dates)
         )
 
+    pnl_message = next((message for message in messages if PNL_NOT_READY_TEXT in message.lower()), None)
+
     return FlexStatementMetadata(
         to_date=unique_to_dates[0] if unique_to_dates else None,
         when_generated=max(generated_values) if generated_values else None,
         statement_count=statement_count,
+        pnl_ready=pnl_message is None,
+        pnl_message=pnl_message,
+        pnl_warning=_pnl_zero_fingerprint_warning(root) if pnl_message is None else None,
     )
+
+
+def _pnl_zero_fingerprint_warning(root: ET.Element) -> Optional[str]:
+    value_positions = 0
+    pnl_values = []
+    for node in root.iter():
+        tag = node.tag.split("}")[-1]
+        if tag not in {"OpenPosition", "Position"}:
+            continue
+        if _instrument_from_node(node) is None:
+            continue
+        if _float(_attr(node, "positionValue")) is None:
+            continue
+        value_positions += 1
+        pnl_values.append(_float(_attr(node, "fifoPnlUnrealized")))
+
+    if not value_positions:
+        return None
+    if all(value is None or abs(value) < 1e-9 for value in pnl_values):
+        return "All Flex position CAD PnL values are zero or missing while position values are populated; verify IBKR PnL readiness."
+    return None
 
 
 def _account(node: ET.Element) -> Tuple[str, str]:

@@ -7,6 +7,9 @@ class FlexStatementMetadata:
     to_date: Optional[str]
     when_generated: Optional[str]
     statement_count: int = 0
+    pnl_ready: bool = True
+    pnl_message: Optional[str] = None
+    pnl_warning: Optional[str] = None
 
 
 @dataclass(frozen=True)

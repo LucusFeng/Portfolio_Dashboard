@@ -126,6 +126,45 @@ def test_parse_flex_statement_metadata_reads_statement_partition_fields():
     assert metadata.to_date == "2026-07-20"
     assert metadata.when_generated == "2026-07-21T17:28:53"
     assert metadata.statement_count == 1
+    assert metadata.pnl_ready is True
+    assert metadata.pnl_message is None
+    assert metadata.pnl_warning is None
+
+
+def test_parse_flex_statement_metadata_detects_explicit_pnl_not_ready_message():
+    xml_text = """
+    <FlexQueryResponse>
+      <FlexStatements>
+        <FlexStatement accountId="U1" toDate="20260901" whenGenerated="20260902;010000">
+          <Message>Realized P/L is not ready and has been disabled for this statement.</Message>
+          <OpenPositions>
+            <OpenPosition accountId="U1" symbol="AAPL" description="APPLE INC" assetCategory="STK" currency="USD" position="1" positionValue="100" positionValueInBase="135" fifoPnlUnrealized="0" />
+          </OpenPositions>
+        </FlexStatement>
+      </FlexStatements>
+    </FlexQueryResponse>
+    """
+
+    metadata = parse_flex_statement_metadata(xml_text)
+
+    assert metadata.to_date == "2026-09-01"
+    assert metadata.when_generated == "2026-09-02T01:00:00"
+    assert metadata.pnl_ready is False
+    assert "Realized P/L is not ready" in metadata.pnl_message
+    assert metadata.pnl_warning is None
+
+
+def test_parse_flex_statement_metadata_warns_on_all_zero_pnl_without_auto_nulling():
+    xml_text = Path("tests/fixtures/sample_flex.xml").read_text().replace(
+        'fifoPnlUnrealized="350.00"',
+        'fifoPnlUnrealized="0.00"',
+    )
+
+    metadata = parse_flex_statement_metadata(xml_text)
+
+    assert metadata.pnl_ready is True
+    assert metadata.pnl_message is None
+    assert "zero or missing" in metadata.pnl_warning
 
 
 def test_parse_flex_statement_metadata_rejects_mixed_statement_dates():

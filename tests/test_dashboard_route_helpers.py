@@ -306,6 +306,62 @@ def test_flex_evidence_dedups_and_reconciliation_replaces_same_partition():
     assert position_dates["count"] == 1
 
 
+def test_pending_flex_pnl_ingests_values_but_stores_cad_pnl_as_null():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    xml_text = Path("tests/fixtures/sample_flex.xml").read_text().replace(
+        '<FlexStatement accountId="U111111" toDate="20260720" whenGenerated="20260721;172853">',
+        '<FlexStatement accountId="U111111" toDate="20260720" whenGenerated="20260721;010000"><Message>Realized P/L is not ready and has been disabled for this statement.</Message>',
+    ).replace('fifoPnlUnrealized="350.00"', 'fifoPnlUnrealized="0.00"')
+
+    result = dashboard_routes._ingest_flex_xml(conn, xml_text, "manual_login1", "manual")
+
+    evidence = conn.execute("SELECT pnl_ready, pnl_message, pnl_warning FROM evidence_store").fetchone()
+    values = conn.execute(
+        "SELECT COUNT(*) AS count, SUM(CASE WHEN fifo_pnl_unrealized IS NULL THEN 1 ELSE 0 END) AS null_pnl FROM position_values"
+    ).fetchone()
+    cash = conn.execute("SELECT COUNT(*) AS count FROM cash_balances").fetchone()
+
+    assert result["pnl_ready"] is False
+    assert evidence["pnl_ready"] == 0
+    assert "Realized P/L is not ready" in evidence["pnl_message"]
+    assert evidence["pnl_warning"] is None
+    assert values["count"] == 2
+    assert values["null_pnl"] == 2
+    assert cash["count"] == 2
+
+
+def test_complete_statement_backfills_pending_cad_pnl_for_same_statement_date():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    complete_xml = Path("tests/fixtures/sample_flex.xml").read_text()
+    pending_xml = complete_xml.replace(
+        '<FlexStatement accountId="U111111" toDate="20260720" whenGenerated="20260721;172853">',
+        '<FlexStatement accountId="U111111" toDate="20260720" whenGenerated="20260721;010000"><Message>Realized P/L is not ready and has been disabled for this statement.</Message>',
+    ).replace('fifoPnlUnrealized="350.00"', 'fifoPnlUnrealized="0.00"')
+
+    dashboard_routes._ingest_flex_xml(conn, pending_xml, "manual_login1", "manual")
+    assert conn.execute("SELECT fifo_pnl_unrealized FROM position_values WHERE fifo_pnl_unrealized IS NOT NULL").fetchone() is None
+
+    dashboard_routes._ingest_flex_xml(conn, complete_xml, "manual_login1", "manual")
+
+    apple = conn.execute(
+        """
+        SELECT pv.fifo_pnl_unrealized, pv.statement_generated_at
+        FROM position_values pv
+        JOIN instruments i ON i.id = pv.instrument_id
+        WHERE i.symbol = 'AAPL'
+        """
+    ).fetchone()
+    evidence_count = conn.execute("SELECT COUNT(*) AS count FROM evidence_store").fetchone()
+
+    assert apple["fifo_pnl_unrealized"] == 350
+    assert apple["statement_generated_at"] == "2026-07-21T17:28:53"
+    assert evidence_count["count"] == 2
+
+
 def test_reset_database_clears_dev_data_and_records_run():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

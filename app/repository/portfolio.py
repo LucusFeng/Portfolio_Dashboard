@@ -75,10 +75,17 @@ def latest_position_marks(conn: sqlite3.Connection):
             pv.value_base AS flex_value_base,
             pv.fifo_pnl_unrealized AS flex_unrealized_pnl_cad,
             pv.native_currency AS flex_native_currency,
+            pv.snapshot_date,
+            pv.statement_generated_at,
+            pv.ingested_at,
+            ev.pnl_ready,
+            ev.pnl_message,
+            ev.pnl_warning,
             'IBKR Flex' AS value_source
         FROM latest_value pv
         JOIN accounts a ON a.id = pv.account_id
         JOIN instruments i ON i.id = pv.instrument_id
+        LEFT JOIN evidence_store ev ON ev.content_hash = pv.content_hash
         LEFT JOIN latest_position pos
           ON pos.account_id = pv.account_id
          AND pos.instrument_id = pv.instrument_id
@@ -107,6 +114,12 @@ def latest_position_marks(conn: sqlite3.Connection):
             NULL AS flex_value_base,
             NULL AS flex_unrealized_pnl_cad,
             NULL AS flex_native_currency,
+            pos.snapshot_date,
+            pos.statement_generated_at,
+            pos.ingested_at,
+            NULL AS pnl_ready,
+            NULL AS pnl_message,
+            NULL AS pnl_warning,
             'Price' AS value_source
         FROM latest_position pos
         JOIN accounts a ON a.id = pos.account_id
@@ -138,10 +151,17 @@ def latest_position_marks(conn: sqlite3.Connection):
             NULL AS flex_value_base,
             NULL AS flex_unrealized_pnl_cad,
             NULL AS flex_native_currency,
+            pos.snapshot_date,
+            pos.statement_generated_at,
+            pos.ingested_at,
+            ev.pnl_ready,
+            ev.pnl_message,
+            ev.pnl_warning,
             'IBKR Flex' AS value_source
         FROM latest_position pos
         JOIN accounts a ON a.id = pos.account_id
         JOIN instruments i ON i.id = pos.instrument_id
+        LEFT JOIN evidence_store ev ON ev.content_hash = pos.content_hash
         LEFT JOIN latest_value pv
           ON pv.account_id = pos.account_id
          AND pv.instrument_id = pos.instrument_id

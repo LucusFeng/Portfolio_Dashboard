@@ -1,5 +1,6 @@
 import time
 import datetime as dt
+from dataclasses import replace
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -61,10 +62,15 @@ def _ingest_flex_xml(conn, xml_text: str, source_key: str, ingest_kind: str = "a
         metadata.to_date,
         metadata.when_generated,
         ingested_at,
+        metadata.pnl_ready,
+        metadata.pnl_message,
+        metadata.pnl_warning,
     )
     parsed_transactions = parse_flex_transactions(xml_text, source="ibkr_flex_%s" % source_key)
     parsed_positions = parse_flex_positions(xml_text)
     parsed_position_values = parse_flex_position_values(xml_text)
+    if not metadata.pnl_ready:
+        parsed_position_values = [_without_cad_pnl(value) for value in parsed_position_values]
     parsed_cash_reports = parse_flex_cash_reports(xml_text)
     inserted = append_transactions(conn, parsed_transactions, evidence.content_hash)
     position_values = upsert_position_values(
@@ -105,6 +111,9 @@ def _ingest_flex_xml(conn, xml_text: str, source_key: str, ingest_kind: str = "a
         "summary": summary,
         "snapshot_date": snapshot_date,
         "statement_generated_at": metadata.when_generated,
+        "pnl_ready": metadata.pnl_ready,
+        "pnl_message": metadata.pnl_message,
+        "pnl_warning": metadata.pnl_warning,
         "content_hash": evidence.content_hash,
         "evidence_id": evidence.evidence_id,
         "evidence_was_new": evidence.was_new,
@@ -119,6 +128,26 @@ def _ingest_flex_xml(conn, xml_text: str, source_key: str, ingest_kind: str = "a
         "reconciled": reconciled,
         "cash_balances": cash_balances,
     }
+
+
+def _without_cad_pnl(value):
+    return replace(
+        value,
+        fifo_pnl_unrealized=None,
+        unrealized_capital_gains_pnl=None,
+        unrealized_fx_pnl=None,
+    )
+
+
+def _pnl_status_text(result) -> str:
+    if not result["pnl_ready"]:
+        return " CAD PnL pending for %s: %s" % (
+            result["snapshot_date"],
+            result["pnl_message"] or "IBKR P/L not ready.",
+        )
+    if result["pnl_warning"]:
+        return " CAD PnL warning for %s: %s" % (result["snapshot_date"], result["pnl_warning"])
+    return ""
 
 
 def _section_summary(label: str, summary) -> str:
@@ -239,12 +268,13 @@ def _refresh_transactions_for_logins(settings: Settings, conn, requested_logins)
                 result = _ingest_flex_xml(conn, xml_text, login_name, "api")
             section_counts.append(_section_summary(login_name, result["summary"]))
             section_counts.append(
-                "%s statement_date=%s evidence=%s:%s"
+                "%s statement_date=%s evidence=%s:%s%s"
                 % (
                     login_name,
                     result["snapshot_date"],
                     "new" if result["evidence_was_new"] else "same",
                     _short_id(result["content_hash"]),
+                    _pnl_status_text(result),
                 )
             )
             inserted += result["inserted"]
@@ -271,6 +301,9 @@ def _refresh_transactions_for_logins(settings: Settings, conn, requested_logins)
     elif failures:
         status = "partial_success"
         hint = " Some Flex logins failed; previously stored data for failed logins was left unchanged."
+    elif "CAD PnL pending" in " ".join(section_counts):
+        status = "cad_pnl_pending"
+        hint = " One or more statements were ingested with IBKR CAD PnL pending."
     elif parsed_transactions_count == 0 and parsed_positions_count > 0:
         status = "needs_transaction_history"
         hint = " Broker positions were found, but no trades/cash flows were parsed; expand the Flex query sections/date range."
@@ -351,11 +384,11 @@ async def upload_flex(
             record_run(
                 conn,
                 "flex_xml_upload",
-                "success",
+                "cad_pnl_pending" if not result["pnl_ready"] else "success",
                 (
                     "Uploaded %s. Parsed %s transactions/%s broker positions/%s position values/%s cash reports; "
                     "inserted %s transactions; rebuilt %s lots/%s positions; stored %s position values/%s cash balances; "
-                    "reconciled %s position rows. statement_date=%s evidence=%s:%s. %s"
+                    "reconciled %s position rows. statement_date=%s evidence=%s:%s.%s %s"
                 )
                 % (
                     source_key,
@@ -372,6 +405,7 @@ async def upload_flex(
                     result["snapshot_date"],
                     "new" if result["evidence_was_new"] else "same",
                     _short_id(result["content_hash"]),
+                    _pnl_status_text(result),
                     _section_summary(source_key, result["summary"]),
                 ),
             )

@@ -97,7 +97,22 @@
     .warn { color: var(--warn); font-weight: 650; }
     .profit { color: var(--profit); font-weight: 650; }
     .loss { color: var(--loss); font-weight: 650; }
+    .pending { color: var(--warn); font-weight: 650; }
     .empty { padding: 24px 8px; color: var(--muted); }
+    .asof {
+      margin-top: 8px;
+      color: var(--ink);
+      font-weight: 700;
+    }
+    .banner {
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      border-radius: 8px;
+      color: var(--warn);
+      font-weight: 650;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+    }
   </style>
 </head>
 <body>
@@ -105,6 +120,9 @@
     <div>
       <h1>Portfolio Dashboard</h1>
       <p>Transaction-first local portfolio platform, normalized to CAD.</p>
+      {% if data.as_of_date %}
+        <p class="asof">Data as of {{ data.as_of_date }} market close{% if data.has_mixed_snapshot_dates %} - accounts have mixed close dates{% endif %}{% if data.has_pending_cad_pnl %} - CAD PnL pending{% endif %}</p>
+      {% endif %}
       {% if data.last_ingestion_message %}
         <p class="muted">Last run: {{ data.last_ingestion_message }}</p>
       {% endif %}
@@ -129,13 +147,19 @@
   </header>
 
   <main>
+    {% if data.has_mixed_snapshot_dates %}
+      <div class="banner">Accounts are showing different close dates. Consolidated totals blend the latest available complete data per account; see Accounts for details.</div>
+    {% endif %}
+    {% if data.has_pending_cad_pnl %}
+      <div class="banner">IBKR CAD PnL is pending for one or more holdings. Values, cash, quantities, and USD PnL are still populated; CAD PnL will backfill when IBKR publishes it.</div>
+    {% endif %}
     <div class="stats">
       <div class="stat">
-        <span class="muted">Positions CAD</span>
+        <span class="muted">Positions CAD{% if data.has_mixed_snapshot_dates %} (mixed dates){% endif %}</span>
         <strong>${{ "%.2f"|format(data.positions_total_cad) }}</strong>
       </div>
       <div class="stat">
-        <span class="muted">Total CAD incl. cash</span>
+        <span class="muted">Total CAD incl. cash{% if data.has_mixed_snapshot_dates %} (mixed dates){% endif %}</span>
         <strong>${{ "%.2f"|format(data.total_cad) }}</strong>
       </div>
       <div class="stat">
@@ -156,13 +180,17 @@
       <h2>Accounts</h2>
       {% if data.account_summaries %}
       <table>
-        <thead><tr><th>Account</th><th class="num">Market value CAD</th><th class="num">Missing marks</th></tr></thead>
+        <thead><tr><th>Account</th><th>As of close</th><th>Statement generated</th><th>Ingested</th><th class="num">Market value CAD</th><th class="num">Missing marks</th><th class="num">CAD PnL pending</th></tr></thead>
         <tbody>
           {% for account in data.account_summaries %}
           <tr>
             <td>{{ account.account_label }}</td>
+            <td>{% if account.snapshot_date %}{{ account.snapshot_date }}{% else %}-{% endif %}</td>
+            <td>{% if account.statement_generated_at %}{{ account.statement_generated_at }}{% else %}-{% endif %}</td>
+            <td>{% if account.ingested_at %}{{ account.ingested_at }}{% else %}-{% endif %}</td>
             <td class="num">${{ "%.2f"|format(account.market_value_cad) }}</td>
             <td class="num">{{ account.missing_prices }}</td>
+            <td class="num">{% if account.cad_pnl_pending %}<span class="pending">{{ account.cad_pnl_pending }}</span>{% else %}0{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -250,7 +278,7 @@
             <td class="num">{% if row.market_value is not none %}{{ "%.2f"|format(row.market_value) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
             <td class="num{% if row.unrealized_pnl is not none and row.unrealized_pnl > 0 %} profit{% elif row.unrealized_pnl is not none and row.unrealized_pnl < 0 %} loss{% endif %}">{% if row.unrealized_pnl is not none %}{{ "%.2f"|format(row.unrealized_pnl) }} {{ row.currency }}{% else %}-{% endif %}</td>
-            <td class="num{% if row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad > 0 %} profit{% elif row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad < 0 %} loss{% endif %}">{% if row.unrealized_pnl_cad is not none %}${{ "%.2f"|format(row.unrealized_pnl_cad) }}{% else %}-{% endif %}</td>
+            <td class="num{% if row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad > 0 %} profit{% elif row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad < 0 %} loss{% elif row.cad_pnl_status == 'pending' %} pending{% endif %}">{% if row.unrealized_pnl_cad is not none %}${{ "%.2f"|format(row.unrealized_pnl_cad) }}{% elif row.cad_pnl_status == 'pending' %}pending{% else %}-{% endif %}</td>
             <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
           </tr>
           {% endfor %}
@@ -284,7 +312,7 @@
             <td class="num">{% if row.market_value is not none %}{{ "%.2f"|format(row.market_value) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
             <td class="num{% if row.unrealized_pnl is not none and row.unrealized_pnl > 0 %} profit{% elif row.unrealized_pnl is not none and row.unrealized_pnl < 0 %} loss{% endif %}">{% if row.unrealized_pnl is not none %}{{ "%.2f"|format(row.unrealized_pnl) }} {{ row.currency }}{% else %}-{% endif %}</td>
-            <td class="num{% if row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad > 0 %} profit{% elif row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad < 0 %} loss{% endif %}">{% if row.unrealized_pnl_cad is not none %}${{ "%.2f"|format(row.unrealized_pnl_cad) }}{% else %}-{% endif %}</td>
+            <td class="num{% if row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad > 0 %} profit{% elif row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad < 0 %} loss{% elif row.cad_pnl_status == 'pending' %} pending{% endif %}">{% if row.unrealized_pnl_cad is not none %}${{ "%.2f"|format(row.unrealized_pnl_cad) }}{% elif row.cad_pnl_status == 'pending' %}pending{% else %}-{% endif %}</td>
             <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
           </tr>
           {% endfor %}

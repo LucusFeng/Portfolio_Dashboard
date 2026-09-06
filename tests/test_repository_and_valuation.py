@@ -207,6 +207,64 @@ def test_flex_position_values_round_trip_and_latest_snapshot_wins():
     assert rows[0]["quantity"] == 6
 
 
+def test_dashboard_exposes_account_timestamps_and_mixed_dates():
+    conn = memory_db()
+    first_evidence = store_evidence(
+        conn,
+        "<xml>one</xml>",
+        "login1",
+        "api",
+        "2026-09-02",
+        "2026-09-03T23:56:00",
+        "2026-09-04T04:00:00",
+    )
+    second_evidence = store_evidence(
+        conn,
+        "<xml>two</xml>",
+        "login2",
+        "api",
+        "2026-09-01",
+        "2026-09-02T01:00:00",
+        "2026-09-02T05:00:00",
+        pnl_ready=False,
+        pnl_message="Realized P/L is not ready and has been disabled for this statement.",
+    )
+    upsert_position_values(
+        conn,
+        [ParsedPositionValue("U111111", "Margin", "EQUITY", "AAPL", "APPLE INC", "USD", 100, 135, 1.35, 1, "265598", fifo_pnl_unrealized=10)],
+        "2026-09-02",
+        "test",
+        "2026-09-03T23:56:00",
+        "2026-09-04T04:00:00",
+        first_evidence.content_hash,
+    )
+    upsert_position_values(
+        conn,
+        [ParsedPositionValue("U222222", "RRSP", "EQUITY", "MSFT", "MICROSOFT CORP", "USD", 200, 270, 1.35, 1, "272093")],
+        "2026-09-01",
+        "test",
+        "2026-09-02T01:00:00",
+        "2026-09-02T05:00:00",
+        second_evidence.content_hash,
+    )
+    conn.commit()
+
+    data = build_dashboard_data(conn)
+    summaries = {summary.account_label: summary for summary in data.account_summaries}
+    holdings = {holding.symbol: holding for holding in data.holdings}
+
+    assert data.as_of_date == "2026-09-02"
+    assert data.has_mixed_snapshot_dates is True
+    assert data.has_pending_cad_pnl is True
+    assert summaries["Margin"].snapshot_date == "2026-09-02"
+    assert summaries["Margin"].statement_generated_at == "2026-09-03T23:56:00"
+    assert summaries["Margin"].ingested_at == "2026-09-04T04:00:00"
+    assert summaries["RRSP"].snapshot_date == "2026-09-01"
+    assert summaries["RRSP"].cad_pnl_pending == 1
+    assert holdings["MSFT"].unrealized_pnl_cad is None
+    assert holdings["MSFT"].cad_pnl_status == "pending"
+
+
 def test_ibkr_flex_value_displays_without_derived_position_and_does_not_double_fx():
     conn = memory_db()
     append_fx_rate(conn, "USDCAD", "2026-06-15", 1.35, "test")

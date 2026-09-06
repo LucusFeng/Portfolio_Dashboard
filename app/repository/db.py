@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 TABLES = [
     "evidence_store",
@@ -216,6 +216,9 @@ CREATE TABLE IF NOT EXISTS evidence_store (
     ingest_kind TEXT NOT NULL,
     statement_to_date TEXT,
     statement_generated_at TEXT,
+    pnl_ready INTEGER NOT NULL DEFAULT 1,
+    pnl_message TEXT,
+    pnl_warning TEXT,
     ingested_at TEXT NOT NULL,
     byte_size INTEGER NOT NULL,
     raw_size INTEGER NOT NULL,
@@ -251,11 +254,28 @@ def _drop_app_tables(conn: sqlite3.Connection) -> None:
 
 def init_db(conn: sqlite3.Connection) -> None:
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    if version != SCHEMA_VERSION:
+    if version == 8:
+        _migrate_8_to_9(conn)
+    elif version != SCHEMA_VERSION:
         _drop_app_tables(conn)
     conn.executescript(SCHEMA)
     conn.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
     conn.commit()
+
+
+def _migrate_8_to_9(conn: sqlite3.Connection) -> None:
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(evidence_store)").fetchall()
+    }
+    columns = [
+        ("pnl_ready", "INTEGER NOT NULL DEFAULT 1"),
+        ("pnl_message", "TEXT"),
+        ("pnl_warning", "TEXT"),
+    ]
+    for name, definition in columns:
+        if name not in existing:
+            conn.execute("ALTER TABLE evidence_store ADD COLUMN %s %s" % (name, definition))
 
 
 def reset_db(conn: sqlite3.Connection) -> None:

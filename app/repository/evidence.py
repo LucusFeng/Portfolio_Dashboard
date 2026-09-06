@@ -24,6 +24,9 @@ def store_evidence(
     statement_to_date: Optional[str],
     statement_generated_at: Optional[str],
     ingested_at: str,
+    pnl_ready: bool = True,
+    pnl_message: Optional[str] = None,
+    pnl_warning: Optional[str] = None,
 ) -> EvidenceResult:
     content_hash = _hash_xml(xml_text)
     existing = conn.execute(
@@ -39,8 +42,8 @@ def store_evidence(
         """
         INSERT INTO evidence_store
             (content_hash, source, ingest_kind, statement_to_date, statement_generated_at,
-             ingested_at, byte_size, raw_size, raw_xml_gzip)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             pnl_ready, pnl_message, pnl_warning, ingested_at, byte_size, raw_size, raw_xml_gzip)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             content_hash,
@@ -48,6 +51,9 @@ def store_evidence(
             ingest_kind,
             statement_to_date,
             statement_generated_at,
+            1 if pnl_ready else 0,
+            pnl_message,
+            pnl_warning,
             ingested_at,
             len(compressed),
             len(raw_bytes),
@@ -79,7 +85,8 @@ def list_evidence(conn: sqlite3.Connection):
     return conn.execute(
         """
         SELECT id, content_hash, source, ingest_kind, statement_to_date,
-               statement_generated_at, ingested_at, byte_size, raw_size, created_at
+               statement_generated_at, pnl_ready, pnl_message, pnl_warning,
+               ingested_at, byte_size, raw_size, created_at
         FROM evidence_store
         ORDER BY ingested_at DESC, id DESC
         """

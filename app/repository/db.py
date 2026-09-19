@@ -4,9 +4,11 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 TABLES = [
+    "nav_summary",
+    "daily_nav",
     "evidence_store",
     "cash_balances",
     "reconciliations",
@@ -177,6 +179,54 @@ CREATE TABLE IF NOT EXISTS fx_rates (
     PRIMARY KEY (pair, as_of)
 );
 
+CREATE TABLE IF NOT EXISTS daily_nav (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    report_date TEXT NOT NULL,
+    nav REAL NOT NULL,
+    cash REAL,
+    stock REAL,
+    dividend_accruals REAL,
+    interest_accruals REAL,
+    currency TEXT NOT NULL,
+    content_hash TEXT,
+    ingested_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (account_id, report_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_nav_account_date
+ON daily_nav(account_id, report_date);
+
+CREATE TABLE IF NOT EXISTS nav_summary (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    from_date TEXT NOT NULL,
+    to_date TEXT NOT NULL,
+    twr REAL,
+    starting_value REAL,
+    ending_value REAL,
+    deposits_withdrawals REAL,
+    dividends REAL,
+    mtm REAL,
+    interest REAL,
+    realized REAL,
+    change_in_unrealized REAL,
+    change_in_dividend_accruals REAL,
+    broker_fees REAL,
+    forex_commissions REAL,
+    fx_translation REAL,
+    cost_adjustments REAL,
+    currency TEXT NOT NULL,
+    content_hash TEXT,
+    ingested_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (account_id, to_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_nav_summary_account_date
+ON nav_summary(account_id, to_date);
+
 CREATE TABLE IF NOT EXISTS reconciliations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     snapshot_date TEXT NOT NULL,
@@ -256,6 +306,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
     if version == 8:
         _migrate_8_to_9(conn)
+        _migrate_9_to_10(conn)
+    elif version == 9:
+        _migrate_9_to_10(conn)
     elif version != SCHEMA_VERSION:
         _drop_app_tables(conn)
     conn.executescript(SCHEMA)
@@ -276,6 +329,60 @@ def _migrate_8_to_9(conn: sqlite3.Connection) -> None:
     for name, definition in columns:
         if name not in existing:
             conn.execute("ALTER TABLE evidence_store ADD COLUMN %s %s" % (name, definition))
+
+
+def _migrate_9_to_10(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS daily_nav (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id),
+            report_date TEXT NOT NULL,
+            nav REAL NOT NULL,
+            cash REAL,
+            stock REAL,
+            dividend_accruals REAL,
+            interest_accruals REAL,
+            currency TEXT NOT NULL,
+            content_hash TEXT,
+            ingested_at TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (account_id, report_date)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_daily_nav_account_date
+        ON daily_nav(account_id, report_date);
+
+        CREATE TABLE IF NOT EXISTS nav_summary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id),
+            from_date TEXT NOT NULL,
+            to_date TEXT NOT NULL,
+            twr REAL,
+            starting_value REAL,
+            ending_value REAL,
+            deposits_withdrawals REAL,
+            dividends REAL,
+            mtm REAL,
+            interest REAL,
+            realized REAL,
+            change_in_unrealized REAL,
+            change_in_dividend_accruals REAL,
+            broker_fees REAL,
+            forex_commissions REAL,
+            fx_translation REAL,
+            cost_adjustments REAL,
+            currency TEXT NOT NULL,
+            content_hash TEXT,
+            ingested_at TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (account_id, to_date)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_nav_summary_account_date
+        ON nav_summary(account_id, to_date);
+        """
+    )
 
 
 def reset_db(conn: sqlite3.Connection) -> None:

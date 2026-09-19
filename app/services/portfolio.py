@@ -1,8 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 import sqlite3
 
+from app.repository.nav import latest_nav_summary
 from app.repository.observations import latest_fx_rate
 from app.repository.portfolio import latest_position_marks, latest_reconciliation_warnings
 from app.repository.runs import latest_run_message
@@ -19,6 +20,7 @@ class HoldingRow:
     derived_quantity: Optional[float]
     avg_cost: Optional[float]
     cost_basis: Optional[float]
+    cost_basis_cad: Optional[float]
     price: Optional[float]
     market_value: Optional[float]
     market_value_cad: Optional[float]
@@ -31,6 +33,9 @@ class HoldingRow:
     ingested_at: Optional[str] = None
     cad_pnl_status: Optional[str] = None
     pnl_message: Optional[str] = None
+    pct_return_usd: Optional[float] = None
+    weight_by_value: Optional[float] = None
+    weight_by_cost: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,7 @@ class AccountSummary:
     statement_generated_at: Optional[str] = None
     ingested_at: Optional[str] = None
     cad_pnl_pending: int = 0
+    twr_pct: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +126,11 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
     if market_value is not None and cost_basis is None:
         stale_reason = "missing cost basis"
 
+    cost_basis_cad = to_cad(cost_basis, currency, usdcad) if cost_basis is not None else None
+    pct_return_usd = None
+    if market_value is not None and cost_basis is not None and abs(cost_basis) > 1e-9:
+        pct_return_usd = ((market_value - cost_basis) / cost_basis) * 100.0
+
     return HoldingRow(
         account_label=row["account_label"],
         symbol=row["symbol"],
@@ -130,6 +141,7 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
         derived_quantity=float(row["derived_quantity"]) if row["derived_quantity"] is not None else None,
         avg_cost=float(row["avg_cost"]) if row["avg_cost"] is not None else None,
         cost_basis=cost_basis,
+        cost_basis_cad=cost_basis_cad,
         price=float(price) if price is not None else None,
         market_value=market_value,
         market_value_cad=market_value_cad,
@@ -142,6 +154,7 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
         ingested_at=row["ingested_at"],
         cad_pnl_status=cad_pnl_status,
         pnl_message=pnl_message,
+        pct_return_usd=pct_return_usd,
     )
 
 
@@ -158,6 +171,9 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
                 "market_value_cad": 0.0,
                 "unrealized_pnl": 0.0,
                 "unrealized_pnl_cad": 0.0,
+                "cost_basis": 0.0,
+                "cost_basis_cad": 0.0,
+                "missing_cost_basis": False,
                 "missing": False,
                 "dates": set(),
                 "cad_pnl_pending": False,
@@ -172,6 +188,12 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
         else:
             bucket["market_value"] = float(bucket["market_value"]) + holding.market_value
             bucket["market_value_cad"] = float(bucket["market_value_cad"]) + holding.market_value_cad
+        if holding.cost_basis is None:
+            bucket["missing_cost_basis"] = True
+        else:
+            bucket["cost_basis"] = float(bucket["cost_basis"]) + holding.cost_basis
+            if holding.cost_basis_cad is not None:
+                bucket["cost_basis_cad"] = float(bucket["cost_basis_cad"]) + holding.cost_basis_cad
         if holding.unrealized_pnl is not None:
             bucket["unrealized_pnl"] = float(bucket["unrealized_pnl"]) + holding.unrealized_pnl
         if holding.cad_pnl_status == "pending":
@@ -190,6 +212,11 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
         cad_pnl_missing = bool(bucket["cad_pnl_missing"])
         cad_pnl_status = "pending" if cad_pnl_pending else "missing" if cad_pnl_missing else "ready"
         snapshot_dates = sorted(bucket["dates"])
+        total_cost_basis = float(bucket["cost_basis"])
+        total_cost_basis_cad = float(bucket["cost_basis_cad"])
+        pct_return_usd = None
+        if not bool(bucket["missing_cost_basis"]) and abs(total_cost_basis) > 1e-9 and not missing:
+            pct_return_usd = ((float(bucket["market_value"]) - total_cost_basis) / total_cost_basis) * 100.0
         rows.append(
             HoldingRow(
                 account_label="All accounts",
@@ -200,7 +227,8 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
                 quantity=float(bucket["quantity"]),
                 derived_quantity=None,
                 avg_cost=None,
-                cost_basis=None,
+                cost_basis=None if bool(bucket["missing_cost_basis"]) else total_cost_basis,
+                cost_basis_cad=None if bool(bucket["missing_cost_basis"]) else total_cost_basis_cad,
                 price=sample.price,
                 market_value=None if missing else float(bucket["market_value"]),
                 market_value_cad=None if missing else float(bucket["market_value_cad"]),
@@ -210,14 +238,31 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
                 stale_reason="incomplete marks" if missing else None,
                 snapshot_date=", ".join(snapshot_dates) if snapshot_dates else None,
                 cad_pnl_status=cad_pnl_status,
+                pct_return_usd=pct_return_usd,
             )
         )
     return sorted(rows, key=lambda item: item.symbol)
 
 
+def _with_weights(holdings: List[HoldingRow]) -> List[HoldingRow]:
+    value_total = sum(holding.market_value_cad or 0.0 for holding in holdings)
+    cost_total = sum(holding.cost_basis_cad or 0.0 for holding in holdings)
+    weighted = []
+    for holding in holdings:
+        weighted.append(
+            replace(
+                holding,
+                weight_by_value=(holding.market_value_cad / value_total) if value_total > 1e-9 and holding.market_value_cad is not None else None,
+                weight_by_cost=(holding.cost_basis_cad / cost_total) if cost_total > 1e-9 and holding.cost_basis_cad is not None else None,
+            )
+        )
+    return weighted
+
+
 def get_portfolio(conn: sqlite3.Connection) -> PortfolioData:
     usdcad = latest_fx_rate(conn)
-    holdings = [_holding(row, usdcad) for row in latest_position_marks(conn)]
+    holdings = _with_weights([_holding(row, usdcad) for row in latest_position_marks(conn)])
+    account_twr = {row["account_label"]: row["twr"] for row in latest_nav_summary(conn)}
     accounts: Dict[str, Dict[str, object]] = {}
     for holding in holdings:
         bucket = accounts.setdefault(
@@ -252,6 +297,7 @@ def get_portfolio(conn: sqlite3.Connection) -> PortfolioData:
             max(values["statement_generated_values"]) if values["statement_generated_values"] else None,
             max(values["ingested_values"]) if values["ingested_values"] else None,
             int(values["cad_pnl_pending"]),
+            float(account_twr[label]) if account_twr.get(label) is not None else None,
         )
         for label, values in sorted(accounts.items())
     ]
@@ -269,7 +315,7 @@ def get_portfolio(conn: sqlite3.Connection) -> PortfolioData:
     return PortfolioData(
         holdings=holdings,
         account_summaries=summaries,
-        consolidated=_consolidate(holdings),
+        consolidated=_with_weights(_consolidate(holdings)),
         grand_total_cad=sum(summary.market_value_cad for summary in summaries),
         latest_fx_rate=usdcad,
         last_ingestion_message=latest_run_message(conn),

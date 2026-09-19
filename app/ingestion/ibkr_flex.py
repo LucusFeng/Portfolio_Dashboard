@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Tuple
 from app.models import (
     FlexStatementMetadata,
     ParsedCashReport,
+    ParsedChangeInNav,
+    ParsedDailyNav,
     ParsedInstrument,
     ParsedPosition,
     ParsedPositionValue,
@@ -33,6 +35,8 @@ def summarize_flex_xml(xml_text: str) -> Dict[str, int]:
         "Position": 0,
         "CashReport": 0,
         "CashReportCurrency": 0,
+        "ChangeInNAV": 0,
+        "EquitySummaryByReportDateInBase": 0,
     }
     for node in root.iter():
         tag = node.tag.split("}")[-1]
@@ -237,6 +241,76 @@ def parse_flex_position_values(xml_text: str) -> List[ParsedPositionValue]:
         )
 
     return values
+
+
+def parse_flex_change_in_nav(xml_text: str) -> List[ParsedChangeInNav]:
+    root = ET.fromstring(xml_text)
+    summaries: List[ParsedChangeInNav] = []
+
+    for node in root.iter():
+        if node.tag.split("}")[-1] != "ChangeInNAV":
+            continue
+        account_id, account_label = _account(node)
+        from_date = _attr(node, "fromDate")
+        to_date = _attr(node, "toDate")
+        currency = (_attr(node, "currency") or "CAD").upper()
+        if not from_date or not to_date:
+            continue
+        summaries.append(
+            ParsedChangeInNav(
+                account_external_id=account_id,
+                account_label=account_label,
+                currency=currency,
+                from_date=_date(from_date),
+                to_date=_date(to_date),
+                twr=_float(_attr(node, "twr")),
+                starting_value=_float(_attr(node, "startingValue")),
+                ending_value=_float(_attr(node, "endingValue")),
+                deposits_withdrawals=_float(_attr(node, "depositsWithdrawals")),
+                dividends=_float(_attr(node, "dividends")),
+                mtm=_float(_attr(node, "mtm")),
+                interest=_float(_attr(node, "interest")),
+                realized=_float(_attr(node, "realized")),
+                change_in_unrealized=_float(_attr(node, "changeInUnrealized")),
+                change_in_dividend_accruals=_float(_attr(node, "changeInDividendAccruals")),
+                broker_fees=_float(_attr(node, "brokerFees")),
+                forex_commissions=_float(_attr(node, "forexCommissions")),
+                fx_translation=_float(_attr(node, "fxTranslation")),
+                cost_adjustments=_float(_attr(node, "costAdjustments")),
+            )
+        )
+
+    return summaries
+
+
+def parse_flex_daily_nav(xml_text: str) -> List[ParsedDailyNav]:
+    root = ET.fromstring(xml_text)
+    rows: List[ParsedDailyNav] = []
+
+    for node in root.iter():
+        if node.tag.split("}")[-1] != "EquitySummaryByReportDateInBase":
+            continue
+        total = _float(_attr(node, "total"))
+        report_date = _attr(node, "reportDate")
+        currency = (_attr(node, "currency") or "CAD").upper()
+        if total is None or not report_date:
+            continue
+        account_id, account_label = _account(node)
+        rows.append(
+            ParsedDailyNav(
+                account_external_id=account_id,
+                account_label=account_label,
+                report_date=_date(report_date),
+                currency=currency,
+                nav=total,
+                cash=_float(_attr(node, "cash")),
+                stock=_float(_attr(node, "stock")),
+                dividend_accruals=_float(_attr(node, "dividendAccruals")),
+                interest_accruals=_float(_attr(node, "interestAccruals")),
+            )
+        )
+
+    return rows
 
 
 def parse_flex_cash_report(xml_text: str) -> List[ParsedCashReport]:

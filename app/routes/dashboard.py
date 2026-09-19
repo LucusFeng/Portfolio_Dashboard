@@ -13,6 +13,8 @@ from app.ingestion.ibkr_flex import (
     FlexClient,
     parse_flex_statement_metadata,
     parse_flex_cash_reports,
+    parse_flex_change_in_nav,
+    parse_flex_daily_nav,
     parse_flex_position_values,
     parse_flex_positions,
     parse_flex_transactions,
@@ -23,6 +25,7 @@ from app.ingestion.ibkr_gateway import GatewayAuthError, GatewayClient, current_
 from app.ingestion.reference_data import YFinanceProvider
 from app.repository.cash import upsert_cash_balances
 from app.repository.evidence import store_evidence
+from app.repository.nav import upsert_daily_nav, upsert_nav_summary
 from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
 from app.repository.position_values import upsert_position_values
 from app.repository.positions import rebuild_derived_state, record_reconciliation
@@ -72,6 +75,8 @@ def _ingest_flex_xml(conn, xml_text: str, source_key: str, ingest_kind: str = "a
     if not metadata.pnl_ready:
         parsed_position_values = [_without_cad_pnl(value) for value in parsed_position_values]
     parsed_cash_reports = parse_flex_cash_reports(xml_text)
+    parsed_nav_summaries = parse_flex_change_in_nav(xml_text)
+    parsed_daily_nav = parse_flex_daily_nav(xml_text)
     inserted = append_transactions(conn, parsed_transactions, evidence.content_hash)
     position_values = upsert_position_values(
         conn,
@@ -107,6 +112,8 @@ def _ingest_flex_xml(conn, xml_text: str, source_key: str, ingest_kind: str = "a
         ingested_at,
         evidence.content_hash,
     )
+    nav_summaries = upsert_nav_summary(conn, parsed_nav_summaries, evidence.content_hash, ingested_at)
+    daily_nav_rows = upsert_daily_nav(conn, parsed_daily_nav, evidence.content_hash, ingested_at)
     return {
         "summary": summary,
         "snapshot_date": snapshot_date,
@@ -121,12 +128,16 @@ def _ingest_flex_xml(conn, xml_text: str, source_key: str, ingest_kind: str = "a
         "positions": len(parsed_positions),
         "position_values": len(parsed_position_values),
         "cash_reports": len(parsed_cash_reports),
+        "nav_summaries": len(parsed_nav_summaries),
+        "daily_nav": len(parsed_daily_nav),
         "inserted": inserted,
         "stored_position_values": position_values,
         "lots": lots,
         "derived_positions": positions,
         "reconciled": reconciled,
         "cash_balances": cash_balances,
+        "stored_nav_summaries": nav_summaries,
+        "stored_daily_nav": daily_nav_rows,
     }
 
 
@@ -151,13 +162,15 @@ def _pnl_status_text(result) -> str:
 
 
 def _section_summary(label: str, summary) -> str:
-    return "%s sections: trades=%s executions=%s cash_txns=%s open_positions=%s cash_reports=%s" % (
+    return "%s sections: trades=%s executions=%s cash_txns=%s open_positions=%s cash_reports=%s nav_summaries=%s daily_nav=%s" % (
         label,
         summary["Trade"],
         summary["Execution"],
         summary["CashTransaction"],
         summary["OpenPosition"] + summary["Position"],
         summary["CashReportCurrency"] or summary["CashReport"],
+        summary["ChangeInNAV"],
+        summary["EquitySummaryByReportDateInBase"],
     )
 
 

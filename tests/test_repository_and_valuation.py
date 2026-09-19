@@ -3,17 +3,19 @@ from pathlib import Path
 
 from app.db import init_db
 from app.ingestion.cibc_csv import parse_cibc_transactions
-from app.ingestion.ibkr_flex import parse_flex_transactions
+from app.ingestion.ibkr_flex import parse_flex_change_in_nav, parse_flex_daily_nav, parse_flex_transactions
 from app.models import ParsedCashReport, ParsedInstrument, ParsedPositionValue, ParsedTransaction
 from app.repository.cash import upsert_cash_balances
 from app.repository.evidence import get_evidence, list_evidence, store_evidence
 from app.repository.instruments import upsert_instrument
+from app.repository.nav import daily_nav_series, latest_nav_summary, upsert_daily_nav, upsert_nav_summary
 from app.repository.observations import append_fx_rate, append_price, instruments_for_price_refresh
 from app.repository.position_values import latest_position_values, upsert_position_values
 from app.repository.positions import rebuild_derived_state
 from app.repository.transactions import append_transactions
 from app.services.batch_pnl import get_batch_pnl
 from app.services.cash import get_cash
+from app.services.nav import compute_twr
 from app.services.valuation import build_dashboard_data
 
 
@@ -47,6 +49,124 @@ def store_statement_fx(conn, fx_rate: float, snapshot_date: str = "2026-06-15", 
         "test-fx",
     )
 
+
+
+def test_nav_summary_and_daily_nav_upsert_are_idempotent():
+    conn = memory_db()
+    xml_text = Path("docs/phase-2-dev-notes-and-specs/new_flex_sample_v2.xml").read_text()
+    summaries = parse_flex_change_in_nav(xml_text)
+    daily = parse_flex_daily_nav(xml_text)
+
+    assert upsert_nav_summary(conn, summaries, "hash1", "2026-09-12T12:00:00") == 1
+    assert upsert_daily_nav(conn, daily, "hash1", "2026-09-12T12:00:00") == 183
+    assert upsert_nav_summary(conn, summaries, "hash1", "2026-09-12T12:01:00") == 1
+    assert upsert_daily_nav(conn, daily, "hash1", "2026-09-12T12:01:00") == 183
+    conn.commit()
+
+    nav_rows = daily_nav_series(conn)
+    summary_rows = latest_nav_summary(conn)
+
+    assert len(nav_rows) == 183
+    assert len(summary_rows) == 1
+    assert summary_rows[0]["twr"] == 29.009709458
+    assert nav_rows[-1]["nav"] == summary_rows[0]["ending_value"]
+    assert nav_rows[-1]["content_hash"] == "hash1"
+
+
+def test_compute_twr_skips_prefunding_and_returns_best_effort_percentage():
+    nav_series = [
+        ("2026-01-01", 0),
+        ("2026-01-02", 1000),
+        ("2026-01-03", 1100),
+        ("2026-01-04", 1210),
+    ]
+    cash_flows = [("2026-01-02", 1000)]
+
+    assert round(compute_twr(nav_series, cash_flows), 6) == 21.0
+
+
+def test_dashboard_exposes_return_weight_and_nav_metrics():
+    conn = memory_db()
+    append_fx_rate(conn, "USDCAD", "2026-06-15", 1.35, "test")
+    append_transactions(
+        conn,
+        [
+            ParsedTransaction(
+                txn_date="2026-06-10",
+                broker="IBKR",
+                account_external_id="U111111",
+                account_label="RRSP",
+                tax_type="RRSP",
+                txn_type="BUY",
+                quantity=10,
+                price=100,
+                amount=-1000,
+                currency="USD",
+                source="test",
+                external_id="T1",
+                instrument=ParsedInstrument("EQUITY", "AAPL", "APPLE INC", "USD", "265598"),
+                trade_cost=1000,
+            ),
+            ParsedTransaction(
+                txn_date="2026-06-10",
+                broker="IBKR",
+                account_external_id="U111111",
+                account_label="RRSP",
+                tax_type="RRSP",
+                txn_type="DEPOSIT",
+                amount=1350,
+                currency="CAD",
+                source="test",
+                external_id="C1",
+            ),
+        ],
+    )
+    rebuild_derived_state(conn, "2026-06-15")
+    upsert_position_values(
+        conn,
+        [
+            ParsedPositionValue(
+                "U111111",
+                "RRSP",
+                "EQUITY",
+                "AAPL",
+                "APPLE INC",
+                "USD",
+                value_native=1200,
+                value_base=1620,
+                fx_rate_to_base=1.35,
+                quantity=10,
+                conid="265598",
+                mark_price=120,
+                fifo_pnl_unrealized=270,
+            )
+        ],
+        "2026-06-15",
+        "test",
+    )
+    upsert_cash_balances(conn, [ParsedCashReport("U111111", "RRSP", "CAD", 0)], "2026-06-15", "test")
+    upsert_nav_summary(
+        conn,
+        [
+            parse_flex_change_in_nav(
+                '<FlexQueryResponse><ChangeInNAV accountId="U111111" acctAlias="RRSP" currency="CAD" '
+                'fromDate="20260101" toDate="20260615" twr="12.5" endingValue="1620" depositsWithdrawals="1350" /></FlexQueryResponse>'
+            )[0]
+        ],
+        "hash",
+        "2026-06-15T23:00:00",
+    )
+    conn.commit()
+
+    data = build_dashboard_data(conn)
+    holding = data.holdings[0]
+
+    assert round(holding.pct_return_usd, 2) == 20.0
+    assert holding.weight_by_value == 1.0
+    assert holding.weight_by_cost == 1.0
+    assert data.consolidated[0].pct_return_usd == holding.pct_return_usd
+    assert data.account_summaries[0].twr_pct == 12.5
+    assert round(data.simple_return_pct, 2) == 20.0
 
 def test_evidence_store_compresses_round_trips_and_dedups_by_hash():
     conn = memory_db()

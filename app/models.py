@@ -69,6 +69,42 @@ class ParsedCashReport:
 
 
 @dataclass(frozen=True)
+class ParsedChangeInNav:
+    account_external_id: str
+    account_label: str
+    currency: str
+    from_date: str
+    to_date: str
+    twr: Optional[float]
+    starting_value: Optional[float] = None
+    ending_value: Optional[float] = None
+    deposits_withdrawals: Optional[float] = None
+    dividends: Optional[float] = None
+    mtm: Optional[float] = None
+    interest: Optional[float] = None
+    realized: Optional[float] = None
+    change_in_unrealized: Optional[float] = None
+    change_in_dividend_accruals: Optional[float] = None
+    broker_fees: Optional[float] = None
+    forex_commissions: Optional[float] = None
+    fx_translation: Optional[float] = None
+    cost_adjustments: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class ParsedDailyNav:
+    account_external_id: str
+    account_label: str
+    report_date: str
+    currency: str
+    nav: float
+    cash: Optional[float] = None
+    stock: Optional[float] = None
+    dividend_accruals: Optional[float] = None
+    interest_accruals: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class ParsedTransaction:
     txn_date: str
     broker: str

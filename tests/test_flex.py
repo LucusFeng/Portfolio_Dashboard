@@ -9,6 +9,8 @@ from app.ingestion.ibkr_flex import (
     _date,
     _datetime,
     parse_flex_cash_reports,
+    parse_flex_change_in_nav,
+    parse_flex_daily_nav,
     parse_flex_position_values,
     parse_flex_positions,
     parse_flex_statement_metadata,
@@ -94,6 +96,33 @@ def test_parse_flex_position_values_reads_reported_values_directly():
     assert values[0].fifo_pnl_unrealized == 350
     assert sum(value.value_base for value in values) == 3340
 
+
+
+def test_parse_flex_nav_sections_use_authoritative_daily_total():
+    xml_text = Path("docs/phase-2-dev-notes-and-specs/new_flex_sample_v2.xml").read_text()
+
+    summaries = parse_flex_change_in_nav(xml_text)
+    daily_nav = parse_flex_daily_nav(xml_text)
+
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary.account_external_id == "U24872141"
+    assert summary.account_label == "LIFT_Corporate_Acct"
+    assert summary.currency == "CAD"
+    assert summary.from_date == "2026-01-01"
+    assert summary.to_date == "2026-09-11"
+    assert summary.twr == 29.009709458
+    assert summary.deposits_withdrawals == 48500
+    assert len(daily_nav) == 183
+
+    last = daily_nav[-1]
+    assert last.report_date == "2026-09-11"
+    assert last.nav == summary.ending_value
+    assert last.cash == 4745.790540125
+    assert last.stock == 46234.186402
+    assert last.interest_accruals == -2.122569
+    assert round((last.cash or 0) + (last.stock or 0) + (last.dividend_accruals or 0), 6) != round(last.nav, 6)
+    assert round((last.cash or 0) + (last.stock or 0) + (last.dividend_accruals or 0) + (last.interest_accruals or 0), 6) == round(last.nav, 6)
 
 def test_parse_flex_cash_reports_extracts_native_cash_report():
     xml_text = Path("tests/fixtures/sample_flex.xml").read_text()

@@ -15,7 +15,7 @@ from app.repository.positions import rebuild_derived_state
 from app.repository.transactions import append_transactions
 from app.services.batch_pnl import get_batch_pnl
 from app.services.cash import get_cash
-from app.services.nav import compute_twr
+from app.services.nav import compute_twr, contribution_cashflows_cad, get_consolidated_twr
 from app.services.valuation import build_dashboard_data
 
 
@@ -828,6 +828,186 @@ def test_contributions_series_nets_offsetting_pairs_and_total_is_signed():
     assert data.growth_points[0].cumulative_contributions_cad == 0
     assert data.growth_points[-1].cumulative_contributions_cad == 28500
     assert data.contributions_total_cad == 28500
+
+
+def test_schema_10_migration_preserves_transactions_and_adds_alignment_dates():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            txn_date TEXT NOT NULL,
+            account_id INTEGER NOT NULL,
+            instrument_id INTEGER,
+            txn_type TEXT NOT NULL,
+            quantity REAL,
+            price REAL,
+            trade_cost REAL,
+            commission REAL,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            source TEXT NOT NULL,
+            external_id TEXT,
+            content_hash TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX idx_transactions_external_id
+        ON transactions(source, external_id)
+        WHERE external_id IS NOT NULL AND external_id != "";
+        INSERT INTO transactions
+            (txn_date, account_id, txn_type, amount, currency, source, external_id)
+        VALUES ("2026-01-27", 1, "DEPOSIT", 5000, "CAD", "legacy", "C1");
+        PRAGMA user_version = 10;
+        """
+    )
+
+    init_db(conn)
+
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(transactions)")
+    }
+    row = conn.execute(
+        "SELECT external_id, report_date, available_date FROM transactions"
+    ).fetchone()
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert {"report_date", "available_date"} <= columns
+    assert row["external_id"] == "C1"
+    assert row["report_date"] is None
+    assert row["available_date"] is None
+
+
+def _ingest_twr_fixture(conn, filename, source):
+    xml_text = Path(filename).read_text()
+    transactions = parse_flex_transactions(xml_text, source=source)
+    summaries = parse_flex_change_in_nav(xml_text)
+    daily = parse_flex_daily_nav(xml_text)
+    append_transactions(conn, transactions)
+    upsert_nav_summary(conn, summaries, source)
+    upsert_daily_nav(conn, daily, source)
+    conn.commit()
+    account_id = conn.execute(
+        "SELECT id FROM accounts WHERE external_id = ?",
+        (summaries[0].account_external_id,),
+    ).fetchone()["id"]
+    return summaries[0], account_id
+
+
+def test_duplicate_transaction_ingest_enriches_alignment_dates():
+    conn = memory_db()
+    original = ParsedTransaction(
+        txn_date="2026-01-27",
+        broker="IBKR",
+        account_external_id="U1",
+        account_label="RRSP",
+        tax_type="RRSP",
+        txn_type="DEPOSIT",
+        amount=5000,
+        currency="CAD",
+        source="ibkr_flex_login1",
+        external_id="C1",
+    )
+    enriched = ParsedTransaction(
+        txn_date="2026-01-27",
+        broker="IBKR",
+        account_external_id="U1",
+        account_label="RRSP",
+        tax_type="RRSP",
+        txn_type="DEPOSIT",
+        amount=5000,
+        currency="CAD",
+        source="ibkr_flex_login1",
+        external_id="C1",
+        report_date="2026-02-02",
+        available_date="2026-02-02",
+    )
+
+    assert append_transactions(conn, [original]) == 1
+    assert append_transactions(conn, [enriched]) == 0
+    row = conn.execute(
+        "SELECT report_date, available_date FROM transactions WHERE external_id = ?",
+        ("C1",),
+    ).fetchone()
+
+    assert row["report_date"] == "2026-02-02"
+    assert row["available_date"] == "2026-02-02"
+
+
+def test_twr_alignment_matches_broker_fixtures_and_keeps_contribution_dates():
+    conn = memory_db()
+    fixtures = [
+        (
+            "docs/phase-2-dev-notes-and-specs/rrsp_v1_phase2.31.xml",
+            "rrsp_phase231",
+        ),
+        (
+            "docs/phase-2-dev-notes-and-specs/testing_v3_phase2.31.xml",
+            "corporate_phase231",
+        ),
+    ]
+    summaries = []
+
+    for filename, source in fixtures:
+        summary, account_id = _ingest_twr_fixture(conn, filename, source)
+        summaries.append(summary)
+        nav = [
+            (row["report_date"], row["nav"])
+            for row in daily_nav_series(conn, account_id)
+        ]
+        aligned_flows = [
+            (row["flow_date"], row["amount_cad"])
+            for row in contribution_cashflows_cad(conn, account_id)
+        ]
+        computed = compute_twr(nav, aligned_flows)
+        ledger_flows = [
+            (row["txn_date"], row["amount"])
+            for row in conn.execute(
+                """
+                SELECT txn_date, SUM(amount) AS amount
+                FROM transactions
+                WHERE account_id = ?
+                  AND txn_type IN ("DEPOSIT", "WITHDRAWAL")
+                GROUP BY txn_date
+                ORDER BY txn_date
+                """,
+                (account_id,),
+            ).fetchall()
+        ]
+        misaligned = compute_twr(nav, ledger_flows)
+
+        assert computed is not None
+        assert abs(computed - summary.twr) <= 0.75
+        assert misaligned is not None
+        assert abs(misaligned - summary.twr) > 100
+
+    rrsp_account_id = conn.execute(
+        "SELECT id FROM accounts WHERE external_id = ?",
+        ("U24081754",),
+    ).fetchone()["id"]
+    rrsp_ledger_dates = [
+        row["txn_date"]
+        for row in conn.execute(
+            """
+            SELECT txn_date, currency, SUM(amount) AS amount
+            FROM transactions
+            WHERE account_id = ? AND txn_type IN ("DEPOSIT", "WITHDRAWAL")
+            GROUP BY txn_date, currency
+            ORDER BY txn_date
+            """,
+            (rrsp_account_id,),
+        ).fetchall()
+    ]
+    assert rrsp_ledger_dates == ["2026-01-27", "2026-01-29"]
+
+    consolidated = get_consolidated_twr(conn)
+    total_ending_nav = sum(summary.ending_value for summary in summaries)
+    naive_weighted = sum(
+        summary.twr * summary.ending_value for summary in summaries
+    ) / total_ending_nav
+
+    assert consolidated is not None
+    assert abs(consolidated - naive_weighted) > 0.01
 
 
 def test_reference_data_columns_can_be_updated():

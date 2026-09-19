@@ -121,6 +121,8 @@ class ParsedTransaction:
     price: Optional[float] = None
     trade_cost: Optional[float] = None
     commission: Optional[float] = None
+    report_date: Optional[str] = None
+    available_date: Optional[str] = None
 
 
 @dataclass(frozen=True)

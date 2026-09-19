@@ -70,6 +70,26 @@ def test_parse_flex_transactions_normalizes_trades_and_cash_flows():
     assert positive_only == 29263.69
 
 
+def test_parse_flex_cash_flow_keeps_ledger_and_nav_alignment_dates():
+    xml_text = Path(
+        "docs/phase-2-dev-notes-and-specs/rrsp_v1_phase2.31.xml"
+    ).read_text()
+
+    contributions = [
+        txn
+        for txn in parse_flex_transactions(xml_text)
+        if txn.txn_type in {"DEPOSIT", "WITHDRAWAL"}
+    ]
+
+    assert len(contributions) == 2
+    assert contributions[0].txn_date == "2026-01-27"
+    assert contributions[0].report_date == "2026-02-02"
+    assert contributions[0].available_date == "2026-02-02"
+    assert contributions[1].txn_date == "2026-01-29"
+    assert contributions[1].report_date == "2026-02-04"
+    assert contributions[1].available_date == "2026-02-04"
+
+
 def test_parse_flex_positions_keeps_reconciliation_shape():
     xml_text = Path("tests/fixtures/sample_flex.xml").read_text()
 

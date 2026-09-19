@@ -415,9 +415,15 @@ def parse_flex_transactions(xml_text: str, source: str = "ibkr_flex") -> List[Pa
                 currency=currency,
                 source=source,
                 external_id=_attr(node, "transactionID", "transactionId", "id"),
+                report_date=_optional_date(_attr(node, "reportDate")),
+                available_date=_optional_date(_attr(node, "availableForTradingDate")),
             )
         )
     return transactions
+
+
+def _optional_date(value: Optional[str]) -> Optional[str]:
+    return _date(value) if value else None
 
 
 def _cash_type(raw_type: str, amount: float) -> str:

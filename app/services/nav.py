@@ -60,7 +60,7 @@ def get_consolidated_twr(conn: sqlite3.Connection) -> Optional[float]:
     if not nav_by_date:
         return None
     flows = [
-        (row["txn_date"], float(row["amount_cad"]))
+        (row["flow_date"], float(row["amount_cad"]))
         for row in contribution_cashflows_cad(conn)
         if row["amount_cad"] is not None
     ]
@@ -76,7 +76,7 @@ def contribution_cashflows_cad(conn: sqlite3.Connection, account_id: Optional[in
     return conn.execute(
         """
         SELECT
-            t.txn_date,
+            COALESCE(t.available_date, t.report_date, t.txn_date) AS flow_date,
             SUM(
                 CASE
                     WHEN t.currency = 'CAD' THEN t.amount
@@ -100,8 +100,8 @@ def contribution_cashflows_cad(conn: sqlite3.Connection, account_id: Optional[in
         FROM transactions t
         WHERE t.txn_type IN ('DEPOSIT', 'WITHDRAWAL')
           %s
-        GROUP BY t.txn_date
-        ORDER BY t.txn_date
+        GROUP BY COALESCE(t.available_date, t.report_date, t.txn_date)
+        ORDER BY flow_date
         """ % account_filter,
         params,
     ).fetchall()

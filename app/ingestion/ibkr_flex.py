@@ -417,6 +417,7 @@ def parse_flex_transactions(xml_text: str, source: str = "ibkr_flex") -> List[Pa
                 external_id=_attr(node, "transactionID", "transactionId", "id"),
                 report_date=_optional_date(_attr(node, "reportDate")),
                 available_date=_optional_date(_attr(node, "availableForTradingDate")),
+                settle_date=_optional_date(_attr(node, "settleDate")),
             )
         )
     return transactions

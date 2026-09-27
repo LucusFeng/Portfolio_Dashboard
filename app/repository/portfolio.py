@@ -51,6 +51,7 @@ def latest_position_marks(conn: sqlite3.Connection):
              AND latest.as_of = p.as_of
         )
         SELECT
+            a.id AS account_id,
             a.label AS account_label,
             a.broker AS account_broker,
             i.id AS instrument_id,
@@ -96,6 +97,7 @@ def latest_position_marks(conn: sqlite3.Connection):
         UNION ALL
 
         SELECT
+            a.id AS account_id,
             a.label AS account_label,
             a.broker AS account_broker,
             i.id AS instrument_id,
@@ -133,6 +135,7 @@ def latest_position_marks(conn: sqlite3.Connection):
         UNION ALL
 
         SELECT
+            a.id AS account_id,
             a.label AS account_label,
             a.broker AS account_broker,
             i.id AS instrument_id,
@@ -204,6 +207,7 @@ def open_lot_marks(conn: sqlite3.Connection):
              AND d.snapshot_date = pv.snapshot_date
         )
         SELECT
+            a.id AS account_id,
             a.label AS account_label,
             i.symbol,
             i.name,
@@ -233,6 +237,39 @@ def open_lot_marks(conn: sqlite3.Connection):
          AND pv.instrument_id = l.instrument_id
         WHERE l.remaining_qty > 1e-9
         ORDER BY a.label, i.symbol, l.open_date, l.id
+        """
+    ).fetchall()
+
+
+def contribution_events(conn: sqlite3.Connection):
+    # Wealth-reference rows use when cash became available; TWR date semantics stay separate.
+    return conn.execute(
+        """
+        SELECT
+            COALESCE(available_date, report_date, settle_date, txn_date) AS contribution_date,
+            currency,
+            SUM(amount) AS amount
+        FROM transactions
+        WHERE txn_type IN ('DEPOSIT', 'WITHDRAWAL')
+        GROUP BY COALESCE(available_date, report_date, settle_date, txn_date), currency
+        ORDER BY contribution_date, currency
+        """
+    ).fetchall()
+
+
+def contribution_cashflows_by_account(conn: sqlite3.Connection):
+    return conn.execute(
+        """
+        SELECT
+            t.account_id,
+            a.label AS account_label,
+            t.currency,
+            SUM(t.amount) AS amount
+        FROM transactions t
+        JOIN accounts a ON a.id = t.account_id
+        WHERE t.txn_type IN ('DEPOSIT', 'WITHDRAWAL')
+        GROUP BY t.account_id, a.label, t.currency
+        ORDER BY a.label, t.currency
         """
     ).fetchall()
 

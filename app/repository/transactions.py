@@ -24,8 +24,8 @@ def append_transaction(conn: sqlite3.Connection, parsed: ParsedTransaction, cont
             INSERT INTO transactions
                 (txn_date, account_id, instrument_id, txn_type, quantity, price,
                  trade_cost, commission, amount, currency, source, external_id, content_hash,
-                 report_date, available_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 report_date, available_date, settle_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 parsed.txn_date,
@@ -43,6 +43,7 @@ def append_transaction(conn: sqlite3.Connection, parsed: ParsedTransaction, cont
                 content_hash,
                 parsed.report_date,
                 parsed.available_date,
+                parsed.settle_date,
             ),
         )
         return True
@@ -52,10 +53,11 @@ def append_transaction(conn: sqlite3.Connection, parsed: ParsedTransaction, cont
                 """
                 UPDATE transactions
                 SET report_date = COALESCE(report_date, ?),
-                    available_date = COALESCE(available_date, ?)
+                    available_date = COALESCE(available_date, ?),
+                    settle_date = COALESCE(settle_date, ?)
                 WHERE source = ? AND external_id = ?
                 """,
-                (parsed.report_date, parsed.available_date, parsed.source, parsed.external_id),
+                (parsed.report_date, parsed.available_date, parsed.settle_date, parsed.source, parsed.external_id),
             )
             return False
         raise

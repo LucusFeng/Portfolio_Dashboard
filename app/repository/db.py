@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 TABLES = [
     "nav_summary",
@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     content_hash TEXT,
     report_date TEXT,
     available_date TEXT,
+    settle_date TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -310,11 +311,16 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_8_to_9(conn)
         _migrate_9_to_10(conn)
         _migrate_10_to_11(conn)
+        _migrate_11_to_12(conn)
     elif version == 9:
         _migrate_9_to_10(conn)
         _migrate_10_to_11(conn)
+        _migrate_11_to_12(conn)
     elif version == 10:
         _migrate_10_to_11(conn)
+        _migrate_11_to_12(conn)
+    elif version == 11:
+        _migrate_11_to_12(conn)
     elif version != SCHEMA_VERSION:
         _drop_app_tables(conn)
     conn.executescript(SCHEMA)
@@ -399,6 +405,15 @@ def _migrate_10_to_11(conn: sqlite3.Connection) -> None:
     for name in ("report_date", "available_date"):
         if name not in existing:
             conn.execute("ALTER TABLE transactions ADD COLUMN %s TEXT" % name)
+
+
+def _migrate_11_to_12(conn: sqlite3.Connection) -> None:
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(transactions)").fetchall()
+    }
+    if "settle_date" not in existing:
+        conn.execute("ALTER TABLE transactions ADD COLUMN settle_date TEXT")
 
 
 def reset_db(conn: sqlite3.Connection) -> None:

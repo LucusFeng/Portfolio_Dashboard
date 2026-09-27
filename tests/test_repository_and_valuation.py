@@ -4,7 +4,7 @@ from pathlib import Path
 from app.db import init_db
 from app.ingestion.cibc_csv import parse_cibc_transactions
 from app.ingestion.ibkr_flex import parse_flex_change_in_nav, parse_flex_daily_nav, parse_flex_transactions
-from app.models import ParsedCashReport, ParsedInstrument, ParsedPositionValue, ParsedTransaction
+from app.models import ParsedCashReport, ParsedDailyNav, ParsedInstrument, ParsedPositionValue, ParsedTransaction
 from app.repository.cash import upsert_cash_balances
 from app.repository.evidence import get_evidence, list_evidence, store_evidence
 from app.repository.instruments import upsert_instrument
@@ -15,6 +15,7 @@ from app.repository.positions import rebuild_derived_state
 from app.repository.transactions import append_transactions
 from app.services.batch_pnl import get_batch_pnl
 from app.services.cash import get_cash
+from app.services.growth import get_contribution_wealth_series
 from app.services.nav import compute_twr, contribution_cashflows_cad, get_consolidated_twr
 from app.services.valuation import build_dashboard_data
 
@@ -166,7 +167,182 @@ def test_dashboard_exposes_return_weight_and_nav_metrics():
     assert holding.weight_by_cost == 1.0
     assert data.consolidated[0].pct_return_usd == holding.pct_return_usd
     assert data.account_summaries[0].twr_pct == 12.5
+    assert data.account_summaries[0].cash_value_cad == 0
+    assert data.account_summaries[0].total_value_cad == 1620
+    assert data.account_summaries[0].contributions_total_cad == 1350
+    assert round(data.account_summaries[0].simple_return_pct, 2) == 20.0
     assert round(data.simple_return_pct, 2) == 20.0
+
+
+def test_dashboard_simple_return_is_scoped_by_account_and_includes_cash():
+    conn = memory_db()
+    append_transactions(
+        conn,
+        [
+            ParsedTransaction(
+                txn_date="2026-06-01",
+                broker="IBKR",
+                account_external_id="U1",
+                account_label="RRSP",
+                tax_type="RRSP",
+                txn_type="DEPOSIT",
+                amount=1000,
+                currency="CAD",
+                source="test",
+                external_id="D1",
+            ),
+            ParsedTransaction(
+                txn_date="2026-06-01",
+                broker="IBKR",
+                account_external_id="U2",
+                account_label="Margin",
+                tax_type="Taxable",
+                txn_type="DEPOSIT",
+                amount=500,
+                currency="CAD",
+                source="test",
+                external_id="D2",
+            ),
+        ],
+    )
+    upsert_position_values(
+        conn,
+        [
+            ParsedPositionValue(
+                "U1", "RRSP", "EQUITY", "AAA", "AAA INC", "CAD",
+                value_native=1100, value_base=1100, fx_rate_to_base=1,
+                quantity=10, conid="1", mark_price=110,
+            ),
+            ParsedPositionValue(
+                "U2", "Margin", "EQUITY", "BBB", "BBB INC", "CAD",
+                value_native=600, value_base=600, fx_rate_to_base=1,
+                quantity=10, conid="2", mark_price=60,
+            ),
+        ],
+        "2026-06-15",
+        "test",
+    )
+    upsert_cash_balances(
+        conn,
+        [
+            ParsedCashReport("U1", "RRSP", "CAD", 100),
+            ParsedCashReport("U2", "Margin", "CAD", 0),
+        ],
+        "2026-06-15",
+        "test",
+    )
+    conn.commit()
+
+    data = build_dashboard_data(conn)
+    accounts = {row.account_label: row for row in data.account_summaries}
+
+    assert accounts["RRSP"].cash_value_cad == 100
+    assert accounts["RRSP"].total_value_cad == 1200
+    assert accounts["RRSP"].contributions_total_cad == 1000
+    assert round(accounts["RRSP"].simple_return_pct, 2) == 20.0
+    assert accounts["Margin"].total_value_cad == 600
+    assert accounts["Margin"].contributions_total_cad == 500
+    assert round(accounts["Margin"].simple_return_pct, 2) == 20.0
+    assert data.total_cad == 1800
+    assert data.contributions_total_cad == 1500
+    assert round(data.simple_return_pct, 2) == 20.0
+
+
+def test_dashboard_simple_return_is_zero_safe_and_suppressed_without_fx():
+    zero_conn = memory_db()
+    upsert_cash_balances(
+        zero_conn,
+        [ParsedCashReport("U1", "RRSP", "CAD", 100)],
+        "2026-06-15",
+        "test",
+    )
+    zero_conn.commit()
+
+    zero_data = build_dashboard_data(zero_conn)
+    assert zero_data.account_summaries[0].simple_return_pct is None
+    assert zero_data.simple_return_pct is None
+
+    missing_fx_conn = memory_db()
+    append_transactions(
+        missing_fx_conn,
+        [
+            ParsedTransaction(
+                txn_date="2026-06-01",
+                broker="IBKR",
+                account_external_id="U2",
+                account_label="Margin",
+                tax_type="Taxable",
+                txn_type="DEPOSIT",
+                amount=1000,
+                currency="USD",
+                source="test",
+                external_id="D3",
+            )
+        ],
+    )
+    upsert_cash_balances(
+        missing_fx_conn,
+        [ParsedCashReport("U2", "Margin", "USD", 1000)],
+        "2026-06-15",
+        "test",
+    )
+    missing_fx_conn.commit()
+
+    missing_fx_data = build_dashboard_data(missing_fx_conn)
+    assert missing_fx_data.cash.has_missing_fx is True
+    assert missing_fx_data.contributions_total_cad is None
+    assert missing_fx_data.account_summaries[0].total_value_cad is None
+    assert missing_fx_data.account_summaries[0].simple_return_pct is None
+    assert missing_fx_data.simple_return_pct is None
+
+
+def test_dashboard_simple_return_is_suppressed_when_position_marks_are_incomplete():
+    conn = memory_db()
+    append_transactions(
+        conn,
+        [
+            ParsedTransaction(
+                txn_date="2026-06-01",
+                broker="CIBC",
+                account_external_id="C1",
+                account_label="TFSA",
+                tax_type="TFSA",
+                txn_type="DEPOSIT",
+                amount=1000,
+                currency="CAD",
+                source="test",
+                external_id="D4",
+            ),
+            ParsedTransaction(
+                txn_date="2026-06-02",
+                broker="CIBC",
+                account_external_id="C1",
+                account_label="TFSA",
+                tax_type="TFSA",
+                txn_type="BUY",
+                quantity=10,
+                price=50,
+                amount=-500,
+                currency="CAD",
+                source="test",
+                external_id="B1",
+                instrument=ParsedInstrument(
+                    "EQUITY", "RY", "ROYAL BANK OF CANADA", "CAD"
+                ),
+                trade_cost=500,
+            ),
+        ],
+    )
+    rebuild_derived_state(conn, "2026-06-15")
+    conn.commit()
+
+    data = build_dashboard_data(conn)
+
+    assert data.account_summaries[0].missing_prices == 1
+    assert data.account_summaries[0].total_value_cad is None
+    assert data.account_summaries[0].simple_return_pct is None
+    assert data.simple_return_pct is None
+
 
 def test_evidence_store_compresses_round_trips_and_dedups_by_hash():
     conn = memory_db()
@@ -301,7 +477,7 @@ def test_transactions_dedup_lots_positions_and_dashboard_values():
     assert data.cash.accounts[0].status == "ok"
     assert data.positions_total_cad == 1620
     assert data.total_cad == 3240
-    assert data.growth_points[-1].cumulative_contributions_cad == 2700
+    assert data.contribution_wealth_points[-1].cumulative_contributions_cad == 2700
 
 
 def test_flex_position_values_round_trip_and_latest_snapshot_wins():
@@ -824,10 +1000,105 @@ def test_contributions_series_nets_offsetting_pairs_and_total_is_signed():
 
     data = build_dashboard_data(conn)
 
-    assert data.growth_points[0].date == "2026-05-01"
-    assert data.growth_points[0].cumulative_contributions_cad == 0
-    assert data.growth_points[-1].cumulative_contributions_cad == 28500
+    assert data.contribution_wealth_points[0].date == "2026-05-01"
+    assert data.contribution_wealth_points[0].cumulative_contributions_cad == 0
+    assert data.contribution_wealth_points[-1].cumulative_contributions_cad == 28500
     assert data.contributions_total_cad == 28500
+
+
+def test_contribution_wealth_series_groups_effective_dates_and_uses_nearest_nav():
+    conn = memory_db()
+    append_transactions(
+        conn,
+        [
+            ParsedTransaction(
+                "2026-01-27", "IBKR", "U1", "Account 1", "UNKNOWN",
+                "DEPOSIT", 5000, "CAD", "test", "C1",
+                available_date="2026-02-02", report_date="2026-02-02",
+                settle_date="2026-01-27",
+            ),
+            ParsedTransaction(
+                "2026-01-29", "IBKR", "U2", "Account 2", "UNKNOWN",
+                "DEPOSIT", 2500, "CAD", "test", "C2",
+                report_date="2026-02-02", settle_date="2026-01-29",
+            ),
+            ParsedTransaction(
+                "2026-02-01", "IBKR", "U1", "Account 1", "UNKNOWN",
+                "DEPOSIT", 1000, "CAD", "test", "C3",
+                settle_date="2026-02-04",
+            ),
+            ParsedTransaction(
+                "2026-02-07", "IBKR", "U2", "Account 2", "UNKNOWN",
+                "DEPOSIT", 500, "CAD", "test", "C4",
+            ),
+        ],
+    )
+    upsert_daily_nav(
+        conn,
+        [
+            ParsedDailyNav("U1", "Account 1", "2026-02-02", "CAD", 6000),
+            ParsedDailyNav("U2", "Account 2", "2026-02-02", "CAD", 3000),
+            ParsedDailyNav("U1", "Account 1", "2026-02-06", "CAD", 7000),
+            ParsedDailyNav("U2", "Account 2", "2026-02-06", "CAD", 3500),
+            ParsedDailyNav("U1", "Account 1", "2026-02-07", "CAD", 7100),
+            ParsedDailyNav("U2", "Account 2", "2026-02-07", "CAD", 3600),
+        ],
+    )
+    conn.commit()
+
+    points = get_contribution_wealth_series(conn)
+
+    assert [point.date for point in points] == [
+        "2026-02-02", "2026-02-04", "2026-02-07"
+    ]
+    assert points[0].cumulative_contributions_cad == 7500
+    assert points[0].total_value_cad == 9000
+    assert points[0].change_in_value_cad == 1500
+    assert points[0].growth_pct == 20
+    assert points[1].cumulative_contributions_cad == 8500
+    assert points[1].total_value_cad == 10500
+    assert round(points[1].growth_pct, 6) == round((2000 / 8500) * 100, 6)
+    assert points[2].cumulative_contributions_cad == 9000
+    assert points[2].total_value_cad == 10700
+
+
+def test_contribution_wealth_series_is_zero_safe_and_rejects_distant_nav():
+    conn = memory_db()
+    append_transactions(
+        conn,
+        [
+            ParsedTransaction(
+                "2026-02-02", "IBKR", "U1", "Account 1", "UNKNOWN",
+                "DEPOSIT", 100, "CAD", "test", "C1",
+                available_date="2026-02-02",
+            ),
+            ParsedTransaction(
+                "2026-02-02", "IBKR", "U1", "Account 1", "UNKNOWN",
+                "WITHDRAWAL", -100, "CAD", "test", "C2",
+                available_date="2026-02-02",
+            ),
+            ParsedTransaction(
+                "2026-03-01", "IBKR", "U1", "Account 1", "UNKNOWN",
+                "DEPOSIT", 1000, "CAD", "test", "C3",
+                available_date="2026-03-01",
+            ),
+        ],
+    )
+    upsert_daily_nav(
+        conn,
+        [ParsedDailyNav("U1", "Account 1", "2026-02-02", "CAD", 100)],
+    )
+    conn.commit()
+
+    points = get_contribution_wealth_series(conn)
+
+    assert points[0].cumulative_contributions_cad == 0
+    assert points[0].total_value_cad == 100
+    assert points[0].change_in_value_cad == 100
+    assert points[0].growth_pct is None
+    assert points[1].total_value_cad is None
+    assert points[1].change_in_value_cad is None
+    assert points[1].growth_pct is None
 
 
 def test_schema_10_migration_preserves_transactions_and_adds_alignment_dates():
@@ -868,14 +1139,15 @@ def test_schema_10_migration_preserves_transactions_and_adds_alignment_dates():
         row["name"] for row in conn.execute("PRAGMA table_info(transactions)")
     }
     row = conn.execute(
-        "SELECT external_id, report_date, available_date FROM transactions"
+        "SELECT external_id, report_date, available_date, settle_date FROM transactions"
     ).fetchone()
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
-    assert {"report_date", "available_date"} <= columns
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert {"report_date", "available_date", "settle_date"} <= columns
     assert row["external_id"] == "C1"
     assert row["report_date"] is None
     assert row["available_date"] is None
+    assert row["settle_date"] is None
 
 
 def _ingest_twr_fixture(conn, filename, source):
@@ -921,17 +1193,19 @@ def test_duplicate_transaction_ingest_enriches_alignment_dates():
         external_id="C1",
         report_date="2026-02-02",
         available_date="2026-02-02",
+        settle_date="2026-01-27",
     )
 
     assert append_transactions(conn, [original]) == 1
     assert append_transactions(conn, [enriched]) == 0
     row = conn.execute(
-        "SELECT report_date, available_date FROM transactions WHERE external_id = ?",
+        "SELECT report_date, available_date, settle_date FROM transactions WHERE external_id = ?",
         ("C1",),
     ).fetchone()
 
     assert row["report_date"] == "2026-02-02"
     assert row["available_date"] == "2026-02-02"
+    assert row["settle_date"] == "2026-01-27"
 
 
 def test_twr_alignment_matches_broker_fixtures_and_keeps_contribution_dates():

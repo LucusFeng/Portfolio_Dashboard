@@ -123,6 +123,7 @@ class ParsedTransaction:
     commission: Optional[float] = None
     report_date: Optional[str] = None
     available_date: Optional[str] = None
+    settle_date: Optional[str] = None
 
 
 @dataclass(frozen=True)

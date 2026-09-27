@@ -11,6 +11,7 @@ from app.repository.runs import latest_run_message
 
 @dataclass(frozen=True)
 class HoldingRow:
+    account_id: Optional[int]
     account_label: str
     symbol: str
     name: str
@@ -40,6 +41,7 @@ class HoldingRow:
 
 @dataclass(frozen=True)
 class AccountSummary:
+    account_id: int
     account_label: str
     market_value_cad: float
     missing_prices: int
@@ -48,6 +50,10 @@ class AccountSummary:
     ingested_at: Optional[str] = None
     cad_pnl_pending: int = 0
     twr_pct: Optional[float] = None
+    cash_value_cad: Optional[float] = None
+    total_value_cad: Optional[float] = None
+    contributions_total_cad: Optional[float] = None
+    simple_return_pct: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +138,7 @@ def _holding(row: sqlite3.Row, usdcad: Optional[float]) -> HoldingRow:
         pct_return_usd = ((market_value - cost_basis) / cost_basis) * 100.0
 
     return HoldingRow(
+        account_id=int(row["account_id"]),
         account_label=row["account_label"],
         symbol=row["symbol"],
         name=row["name"] or row["symbol"],
@@ -219,6 +226,7 @@ def _consolidate(holdings: List[HoldingRow]) -> List[HoldingRow]:
             pct_return_usd = ((float(bucket["market_value"]) - total_cost_basis) / total_cost_basis) * 100.0
         rows.append(
             HoldingRow(
+                account_id=None,
                 account_label="All accounts",
                 symbol=sample.symbol,
                 name=sample.name,
@@ -262,12 +270,16 @@ def _with_weights(holdings: List[HoldingRow]) -> List[HoldingRow]:
 def get_portfolio(conn: sqlite3.Connection) -> PortfolioData:
     usdcad = latest_fx_rate(conn)
     holdings = _with_weights([_holding(row, usdcad) for row in latest_position_marks(conn)])
-    account_twr = {row["account_label"]: row["twr"] for row in latest_nav_summary(conn)}
-    accounts: Dict[str, Dict[str, object]] = {}
+    nav_summaries = latest_nav_summary(conn)
+    account_twr = {int(row["account_id"]): row["twr"] for row in nav_summaries}
+    accounts: Dict[int, Dict[str, object]] = {}
+
     for holding in holdings:
+        assert holding.account_id is not None
         bucket = accounts.setdefault(
-            holding.account_label,
+            holding.account_id,
             {
+                "account_label": holding.account_label,
                 "market_value_cad": 0.0,
                 "missing_prices": 0.0,
                 "snapshot_dates": set(),
@@ -288,18 +300,45 @@ def get_portfolio(conn: sqlite3.Connection) -> PortfolioData:
             bucket["ingested_values"].append(holding.ingested_at)
         if holding.cad_pnl_status == "pending":
             bucket["cad_pnl_pending"] = int(bucket["cad_pnl_pending"]) + 1
+
+    for row in nav_summaries:
+        account_id = int(row["account_id"])
+        bucket = accounts.setdefault(
+            account_id,
+            {
+                "account_label": row["account_label"],
+                "market_value_cad": 0.0,
+                "missing_prices": 0.0,
+                "snapshot_dates": set(),
+                "statement_generated_values": [],
+                "ingested_values": [],
+                "cad_pnl_pending": 0,
+            },
+        )
+        bucket["snapshot_dates"].add(row["to_date"])
+        if row["ingested_at"]:
+            bucket["ingested_values"].append(row["ingested_at"])
+
     summaries = [
         AccountSummary(
-            label,
-            float(values["market_value_cad"]),
-            int(values["missing_prices"]),
-            max(values["snapshot_dates"]) if values["snapshot_dates"] else None,
-            max(values["statement_generated_values"]) if values["statement_generated_values"] else None,
-            max(values["ingested_values"]) if values["ingested_values"] else None,
-            int(values["cad_pnl_pending"]),
-            float(account_twr[label]) if account_twr.get(label) is not None else None,
+            account_id=account_id,
+            account_label=str(values["account_label"]),
+            market_value_cad=float(values["market_value_cad"]),
+            missing_prices=int(values["missing_prices"]),
+            snapshot_date=max(values["snapshot_dates"]) if values["snapshot_dates"] else None,
+            statement_generated_at=max(values["statement_generated_values"]) if values["statement_generated_values"] else None,
+            ingested_at=max(values["ingested_values"]) if values["ingested_values"] else None,
+            cad_pnl_pending=int(values["cad_pnl_pending"]),
+            twr_pct=(
+                float(account_twr[account_id])
+                if account_twr.get(account_id) is not None
+                else None
+            ),
         )
-        for label, values in sorted(accounts.items())
+        for account_id, values in sorted(
+            accounts.items(),
+            key=lambda item: str(item[1]["account_label"]),
+        )
     ]
     snapshot_dates = sorted({summary.snapshot_date for summary in summaries if summary.snapshot_date})
     warnings = [

@@ -163,12 +163,20 @@
         <strong>${{ "%.2f"|format(data.total_cad) }}</strong>
       </div>
       <div class="stat">
+        <span class="muted">TWR</span>
+        <strong class="{% if data.time_weighted_return_pct is not none and data.time_weighted_return_pct > 0 %}profit{% elif data.time_weighted_return_pct is not none and data.time_weighted_return_pct < 0 %}loss{% endif %}">{% if data.time_weighted_return_pct is not none %}{{ "%.2f"|format(data.time_weighted_return_pct) }}%{% else %}-{% endif %}</strong>
+      </div>
+      <div class="stat">
+        <span class="muted">Simple Return</span>
+        <strong class="{% if data.simple_return_pct is not none and data.simple_return_pct > 0 %}profit{% elif data.simple_return_pct is not none and data.simple_return_pct < 0 %}loss{% endif %}">{% if data.simple_return_pct is not none %}{{ "%.2f"|format(data.simple_return_pct) }}%{% else %}-{% endif %}</strong>
+      </div>
+      <div class="stat">
         <span class="muted">USDCAD</span>
         <strong>{% if data.latest_fx_rate %}{{ "%.4f"|format(data.latest_fx_rate) }}{% else %}<span class="warn">missing</span>{% endif %}</strong>
       </div>
       <div class="stat">
         <span class="muted">Contributions CAD</span>
-        <strong>${{ "%.2f"|format(data.contributions_total_cad) }}</strong>
+        <strong>{% if data.contributions_total_cad is not none %}${{ "%.2f"|format(data.contributions_total_cad) }}{% else %}-{% endif %}</strong>
       </div>
       <div class="stat">
         <span class="muted">Holdings</span>
@@ -180,7 +188,7 @@
       <h2>Accounts</h2>
       {% if data.account_summaries %}
       <table>
-        <thead><tr><th>Account</th><th>As of close</th><th>Statement generated</th><th>Ingested</th><th class="num">Market value CAD</th><th class="num">Missing marks</th><th class="num">CAD PnL pending</th></tr></thead>
+        <thead><tr><th>Account</th><th>As of close</th><th>Statement generated</th><th>Ingested</th><th class="num">Positions CAD</th><th class="num">Cash CAD</th><th class="num">Total value CAD</th><th class="num">Contributions CAD</th><th class="num">TWR</th><th class="num">Simple Return</th><th class="num">Missing marks</th><th class="num">CAD PnL pending</th></tr></thead>
         <tbody>
           {% for account in data.account_summaries %}
           <tr>
@@ -189,6 +197,11 @@
             <td>{% if account.statement_generated_at %}{{ account.statement_generated_at }}{% else %}-{% endif %}</td>
             <td>{% if account.ingested_at %}{{ account.ingested_at }}{% else %}-{% endif %}</td>
             <td class="num">${{ "%.2f"|format(account.market_value_cad) }}</td>
+            <td class="num">{% if account.cash_value_cad is not none %}${{ "%.2f"|format(account.cash_value_cad) }}{% else %}-{% endif %}</td>
+            <td class="num">{% if account.total_value_cad is not none %}${{ "%.2f"|format(account.total_value_cad) }}{% else %}-{% endif %}</td>
+            <td class="num">{% if account.contributions_total_cad is not none %}${{ "%.2f"|format(account.contributions_total_cad) }}{% else %}-{% endif %}</td>
+            <td class="num{% if account.twr_pct is not none and account.twr_pct > 0 %} profit{% elif account.twr_pct is not none and account.twr_pct < 0 %} loss{% endif %}">{% if account.twr_pct is not none %}{{ "%.2f"|format(account.twr_pct) }}%{% else %}-{% endif %}</td>
+            <td class="num{% if account.simple_return_pct is not none and account.simple_return_pct > 0 %} profit{% elif account.simple_return_pct is not none and account.simple_return_pct < 0 %} loss{% endif %}">{% if account.simple_return_pct is not none %}{{ "%.2f"|format(account.simple_return_pct) }}%{% else %}-{% endif %}</td>
             <td class="num">{{ account.missing_prices }}</td>
             <td class="num">{% if account.cad_pnl_pending %}<span class="pending">{{ account.cad_pnl_pending }}</span>{% else %}0{% endif %}</td>
           </tr>
@@ -263,7 +276,7 @@
           <tr>
             <th>Symbol</th><th>Name</th><th>Class</th><th class="num">Qty</th>
             <th>Value source</th><th class="num">Price</th><th class="num">Value</th>
-            <th class="num">Value CAD</th><th class="num">USD PnL</th><th class="num">CAD PnL</th><th>Status</th>
+            <th class="num">Value CAD</th><th class="num">% Gain/Loss</th><th class="num">USD PnL</th><th class="num">CAD PnL</th><th>Status</th>
           </tr>
         </thead>
         <tbody>
@@ -277,6 +290,7 @@
             <td class="num">{% if row.price is not none %}{{ "%.2f"|format(row.price) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td class="num">{% if row.market_value is not none %}{{ "%.2f"|format(row.market_value) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
+            <td class="num{% if row.pct_return_usd is not none and row.pct_return_usd > 0 %} profit{% elif row.pct_return_usd is not none and row.pct_return_usd < 0 %} loss{% endif %}">{% if row.pct_return_usd is not none %}{{ "%.2f"|format(row.pct_return_usd) }}%{% else %}-{% endif %}</td>
             <td class="num{% if row.unrealized_pnl is not none and row.unrealized_pnl > 0 %} profit{% elif row.unrealized_pnl is not none and row.unrealized_pnl < 0 %} loss{% endif %}">{% if row.unrealized_pnl is not none %}{{ "%.2f"|format(row.unrealized_pnl) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td class="num{% if row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad > 0 %} profit{% elif row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad < 0 %} loss{% elif row.cad_pnl_status == 'pending' %} pending{% endif %}">{% if row.unrealized_pnl_cad is not none %}${{ "%.2f"|format(row.unrealized_pnl_cad) }}{% elif row.cad_pnl_status == 'pending' %}pending{% else %}-{% endif %}</td>
             <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
@@ -294,7 +308,7 @@
             <th>Account</th><th>Symbol</th><th>Name</th><th>Class</th><th class="num">Qty</th>
             <th class="num">Avg cost</th><th class="num">Cost basis</th><th>Value source</th>
             <th class="num">Price</th><th class="num">Value</th><th class="num">Value CAD</th>
-            <th class="num">USD PnL</th><th class="num">CAD PnL</th><th>Status</th>
+            <th class="num">% Gain/Loss</th><th class="num">USD PnL</th><th class="num">CAD PnL</th><th>Status</th>
           </tr>
         </thead>
         <tbody>
@@ -311,6 +325,7 @@
             <td class="num">{% if row.price is not none %}{{ "%.2f"|format(row.price) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td class="num">{% if row.market_value is not none %}{{ "%.2f"|format(row.market_value) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td class="num">{% if row.market_value_cad is not none %}${{ "%.2f"|format(row.market_value_cad) }}{% else %}-{% endif %}</td>
+            <td class="num{% if row.pct_return_usd is not none and row.pct_return_usd > 0 %} profit{% elif row.pct_return_usd is not none and row.pct_return_usd < 0 %} loss{% endif %}">{% if row.pct_return_usd is not none %}{{ "%.2f"|format(row.pct_return_usd) }}%{% else %}-{% endif %}</td>
             <td class="num{% if row.unrealized_pnl is not none and row.unrealized_pnl > 0 %} profit{% elif row.unrealized_pnl is not none and row.unrealized_pnl < 0 %} loss{% endif %}">{% if row.unrealized_pnl is not none %}{{ "%.2f"|format(row.unrealized_pnl) }} {{ row.currency }}{% else %}-{% endif %}</td>
             <td class="num{% if row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad > 0 %} profit{% elif row.unrealized_pnl_cad is not none and row.unrealized_pnl_cad < 0 %} loss{% elif row.cad_pnl_status == 'pending' %} pending{% endif %}">{% if row.unrealized_pnl_cad is not none %}${{ "%.2f"|format(row.unrealized_pnl_cad) }}{% elif row.cad_pnl_status == 'pending' %}pending{% else %}-{% endif %}</td>
             <td>{% if row.stale_reason %}<span class="warn">{{ row.stale_reason }}</span>{% else %}ok{% endif %}</td>
@@ -349,20 +364,7 @@
       </table>
     </section>
 
-    <section>
-      <h2>Contributions</h2>
-      <table>
-        <thead><tr><th>Date</th><th class="num">Cumulative contributions CAD</th></tr></thead>
-        <tbody>
-          {% for point in data.growth_points %}
-          <tr>
-            <td>{{ point.date }}</td>
-            <td class="num">{% if point.cumulative_contributions_cad is not none %}${{ "%.2f"|format(point.cumulative_contributions_cad) }}{% else %}<span class="warn">missing FX</span>{% endif %}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </section>
+    {% include "components/contribution_table.html" %}
   </main>
 </body>
 </html>

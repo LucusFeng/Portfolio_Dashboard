@@ -85,9 +85,11 @@ def test_parse_flex_cash_flow_keeps_ledger_and_nav_alignment_dates():
     assert contributions[0].txn_date == "2026-01-27"
     assert contributions[0].report_date == "2026-02-02"
     assert contributions[0].available_date == "2026-02-02"
+    assert contributions[0].settle_date == "2026-01-27"
     assert contributions[1].txn_date == "2026-01-29"
     assert contributions[1].report_date == "2026-02-04"
     assert contributions[1].available_date == "2026-02-04"
+    assert contributions[1].settle_date == "2026-01-29"
 
 
 def test_parse_flex_positions_keeps_reconciliation_shape():
